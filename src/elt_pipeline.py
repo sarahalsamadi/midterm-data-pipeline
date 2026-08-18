@@ -53,10 +53,10 @@ def process_raw_run(run_id):
     error_counts = {}
 
     try:
-        validated_collection.create_index(
-            "order_id",
-            unique=True,
-        )
+        # validated_collection.create_index(
+        #     "order_id",
+        #     unique=True,
+        # )
 
         raw_records = raw_collection.find(
             {
