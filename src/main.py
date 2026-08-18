@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 
 from config.settings import (
     BATCH_SIZE,
@@ -32,7 +33,9 @@ from src.spark_loader import (
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the hybrid data pipeline."
+        description=(
+            "Run the hybrid data pipeline."
+        )
     )
 
     parser.add_argument(
@@ -47,6 +50,10 @@ def main():
         "\n=== Midterm Data Pipeline ==="
     )
 
+    pipeline_start = (
+        time.time()
+    )
+
     engine = choose_engine(
         args.input
     )
@@ -57,24 +64,67 @@ def main():
         os.path.getsize(
             args.input
         )
-        / (1024 * 1024)
+        / (
+            1024
+            * 1024
+        )
     )
 
     if engine == "python_batch":
-        load_result = load_csv_to_raw(
-            args.input
+        load_result = (
+            load_csv_to_raw(
+                args.input
+            )
         )
 
-        run_id = load_result[
-            "run_id"
-        ]
+        run_id = (
+            load_result[
+                "run_id"
+            ]
+        )
 
-        raw_count = load_result[
-            "raw_count"
-        ]
+        raw_count = (
+            load_result[
+                "raw_count"
+            ]
+        )
 
         result = process_raw_run(
             run_id
+        )
+
+        processed = (
+            result[
+                "valid"
+            ]
+            + result[
+                "corrected"
+            ]
+            + result[
+                "quarantine"
+            ]
+        )
+
+        if (
+            processed
+            != raw_count
+        ):
+            raise RuntimeError(
+                "Consistency check failed: "
+                f"raw={raw_count}, "
+                f"classified={processed}"
+            )
+
+        pipeline_elapsed = (
+            time.time()
+            - pipeline_start
+        )
+
+        pipeline_throughput = (
+            raw_count
+            / pipeline_elapsed
+            if pipeline_elapsed > 0
+            else 0.0
         )
 
         print(
@@ -82,42 +132,44 @@ def main():
         )
 
         print(
-            f"Raw: {raw_count}"
+            f"Raw: "
+            f"{raw_count}"
         )
 
         print(
-            f"Valid: {result['valid']}"
+            f"Valid: "
+            f"{result['valid']}"
         )
 
         print(
-            f"Corrected: {result['corrected']}"
+            f"Corrected: "
+            f"{result['corrected']}"
         )
 
         print(
-            f"Quarantine: {result['quarantine']}"
+            f"Quarantine: "
+            f"{result['quarantine']}"
         )
 
         print(
-            f"Inserted: {result['inserted']}"
+            f"Inserted: "
+            f"{result['inserted']}"
         )
 
         print(
-            f"Updated: {result['updated']}"
+            f"Updated: "
+            f"{result['updated']}"
         )
 
         print(
-            f"Unchanged: {result['unchanged']}"
-        )
-
-        processed = (
-            result["valid"]
-            + result["corrected"]
-            + result["quarantine"]
+            f"Unchanged: "
+            f"{result['unchanged']}"
         )
 
         print(
             f"Consistency check: "
-            f"{raw_count} = {processed}"
+            f"{raw_count} = "
+            f"{processed}"
         )
 
         print(
@@ -126,70 +178,122 @@ def main():
         )
 
         metrics = {
-            "run_id": run_id,
-
-            "file_name": os.path.basename(
-                args.input
+            "run_id": (
+                run_id
             ),
 
-            "file_size_mb": round(
-                file_size_mb,
-                2,
+            "file_name": (
+                os.path.basename(
+                    args.input
+                )
             ),
 
-            "engine_used": engine,
+            "file_size_mb": (
+                round(
+                    file_size_mb,
+                    2,
+                )
+            ),
 
-            "read_rows": raw_count,
+            "engine_used": (
+                engine
+            ),
 
-            "loaded_raw": raw_count,
+            "read_rows": (
+                raw_count
+            ),
 
-            "count_valid": result[
-                "valid"
-            ],
+            "loaded_raw": (
+                raw_count
+            ),
 
-            "count_corrected": result[
-                "corrected"
-            ],
+            "count_valid": (
+                result[
+                    "valid"
+                ]
+            ),
 
-            "count_quarantine": result[
-                "quarantine"
-            ],
+            "count_corrected": (
+                result[
+                    "corrected"
+                ]
+            ),
 
-            "seconds_elapsed": round(
+            "count_quarantine": (
+                result[
+                    "quarantine"
+                ]
+            ),
+
+            "classified_count": (
+                processed
+            ),
+
+            "seconds_elapsed": (
+                round(
+                    pipeline_elapsed,
+                    4,
+                )
+            ),
+
+            "throughput": (
+                round(
+                    pipeline_throughput,
+                    2,
+                )
+            ),
+
+            "raw_load_seconds": (
+                round(
+                    load_result[
+                        "elapsed_seconds"
+                    ],
+                    4,
+                )
+            ),
+
+            "raw_load_throughput": (
+                round(
+                    load_result[
+                        "throughput"
+                    ],
+                    2,
+                )
+            ),
+
+            "batch_size": (
+                BATCH_SIZE
+            ),
+
+            "batch_count": (
                 load_result[
-                    "elapsed_seconds"
-                ],
-                4,
+                    "batch_count"
+                ]
             ),
 
-            "throughput": round(
-                load_result[
-                    "throughput"
-                ],
-                2,
+            "counts_case_error": (
+                result[
+                    "errors"
+                ]
             ),
 
-            "batch_size": BATCH_SIZE,
+            "count_inserted": (
+                result[
+                    "inserted"
+                ]
+            ),
 
-            "batch_count": load_result[
-                "batch_count"
-            ],
+            "count_updated": (
+                result[
+                    "updated"
+                ]
+            ),
 
-            "counts_case_error": result[
-                "errors"
-            ],
-
-            "count_inserted": result[
-                "inserted"
-            ],
-
-            "count_updated": result[
-                "updated"
-            ],
-
-            "count_unchanged": result[
-                "unchanged"
-            ],
+            "count_unchanged": (
+                result[
+                    "unchanged"
+                ]
+            ),
         }
 
         save_run_metrics(
@@ -197,8 +301,10 @@ def main():
         )
 
     else:
-        result = load_large_csv_to_raw(
-            args.input
+        result = (
+            load_large_csv_to_raw(
+                args.input
+            )
         )
 
         print(
@@ -255,79 +361,136 @@ def main():
             f"{result['partitions']}"
         )
 
+        print(
+            f"Error counts: "
+            f"{result['error_counts']}"
+        )
+
         metrics = {
-            "run_id": result[
-                "run_id"
-            ],
-
-            "file_name": os.path.basename(
-                args.input
-            ),
-
-            "file_size_mb": round(
-                file_size_mb,
-                2,
-            ),
-
-            "engine_used": engine,
-
-            "read_rows": result[
-                "raw_count"
-            ],
-
-            "loaded_raw": result[
-                "raw_count"
-            ],
-
-            "count_valid": result[
-                "valid_count"
-            ],
-
-            "count_corrected": result[
-                "corrected_count"
-            ],
-
-            "count_quarantine": result[
-                "quarantine_count"
-            ],
-
-            "duplicate_business_keys": result[
-                "duplicate_count"
-            ],
-
-            "validated_unique_count": result[
-                "validated_unique_count"
-            ],
-
-            "seconds_elapsed": round(
+            "run_id": (
                 result[
-                    "elapsed_seconds"
-                ],
-                4,
+                    "run_id"
+                ]
             ),
 
-            "throughput": round(
+            "file_name": (
+                os.path.basename(
+                    args.input
+                )
+            ),
+
+            "file_size_mb": (
+                round(
+                    file_size_mb,
+                    2,
+                )
+            ),
+
+            "engine_used": (
+                engine
+            ),
+
+            "read_rows": (
                 result[
-                    "throughput"
-                ],
-                2,
+                    "raw_count"
+                ]
             ),
 
-            "partitions": result[
-                "partitions"
-            ],
+            "loaded_raw": (
+                result[
+                    "raw_count"
+                ]
+            ),
 
-            "count_inserted": result[
-                "inserted"
-            ],
+            "count_valid": (
+                result[
+                    "valid_count"
+                ]
+            ),
 
-            "count_updated": result[
-                "updated"
-            ],
+            "count_corrected": (
+                result[
+                    "corrected_count"
+                ]
+            ),
 
-            "count_unchanged": result[
-                "unchanged"
-            ],
+            "count_quarantine": (
+                result[
+                    "quarantine_count"
+                ]
+            ),
+
+            "classified_count": (
+                result[
+                    "classified_count"
+                ]
+            ),
+
+            "duplicate_business_keys": (
+                result[
+                    "duplicate_count"
+                ]
+            ),
+
+            "validated_unique_count": (
+                result[
+                    "validated_unique_count"
+                ]
+            ),
+
+            "seconds_elapsed": (
+                round(
+                    result[
+                        "elapsed_seconds"
+                    ],
+                    4,
+                )
+            ),
+
+            "throughput": (
+                round(
+                    result[
+                        "throughput"
+                    ],
+                    2,
+                )
+            ),
+
+            "partitions": (
+                result[
+                    "partitions"
+                ]
+            ),
+
+            "upsert_partitions": (
+                result[
+                    "upsert_partitions"
+                ]
+            ),
+
+            "counts_case_error": (
+                result[
+                    "error_counts"
+                ]
+            ),
+
+            "count_inserted": (
+                result[
+                    "inserted"
+                ]
+            ),
+
+            "count_updated": (
+                result[
+                    "updated"
+                ]
+            ),
+
+            "count_unchanged": (
+                result[
+                    "unchanged"
+                ]
+            ),
         }
 
         save_run_metrics(

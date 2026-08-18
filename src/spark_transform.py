@@ -1,4 +1,6 @@
 from pyspark.sql.functions import (
+    abs as spark_abs,
+    aggregate,
     array,
     coalesce,
     col,
@@ -15,6 +17,7 @@ from pyspark.sql.functions import (
     try_to_timestamp,
     when,
 )
+
 from pyspark.sql.types import (
     ArrayType,
     DoubleType,
@@ -27,18 +30,67 @@ from pyspark.sql.types import (
 
 ITEM_SCHEMA = ArrayType(
     StructType([
-        StructField("sku", StringType(), True),
-        StructField("name", StringType(), True),
-        StructField("qty", IntegerType(), True),
-        StructField("unit_price", DoubleType(), True),
-        StructField("total", DoubleType(), True),
+        StructField(
+            "sku",
+            StringType(),
+            True,
+        ),
+        StructField(
+            "name",
+            StringType(),
+            True,
+        ),
+        StructField(
+            "qty",
+            IntegerType(),
+            True,
+        ),
+        StructField(
+            "unit_price",
+            DoubleType(),
+            True,
+        ),
+        StructField(
+            "total",
+            DoubleType(),
+            True,
+        ),
     ])
 )
 
 
 def number_column(column):
+    text = trim(
+        column.cast(
+            "string"
+        )
+    )
+
+    known_price = (
+        when(
+            text == "ألف",
+            lit(1000.0),
+        )
+        .when(
+            text == "ألفان",
+            lit(2000.0),
+        )
+        .when(
+            text == "ثلاثة آلاف",
+            lit(3000.0),
+        )
+        .when(
+            text == "أربعة آلاف",
+            lit(4000.0),
+        )
+        .when(
+            text == "خمسة آلاف",
+            lit(5000.0),
+        )
+    )
+
     value = translate(
-        column.cast("string"),
+        text,
         "٠١٢٣٤٥٦٧٨٩٫٬",
         "0123456789.,",
     )
@@ -55,56 +107,77 @@ def number_column(column):
         "",
     )
 
-    return (
+    numeric_value = (
         when(
             trim(value) == "",
             None,
         )
         .otherwise(
-            value.cast("double")
+            value.cast(
+                "double"
+            )
         )
     )
 
+    return coalesce(
+        known_price,
+        numeric_value,
+    )
 
-def transform_spark_raw(raw_dataframe):
-    raw = col("raw_record")
+
+def transform_spark_raw(
+    raw_dataframe,
+):
+    raw = col(
+        "raw_record"
+    )
 
     df = raw_dataframe
-
-    # --------------------------------
-    # 1. Trim / basic normalization
-    # --------------------------------
 
     df = (
         df
         .withColumn(
             "order_id_clean",
-            trim(raw["order_id"]),
+            trim(
+                raw["order_id"]
+            ),
         )
         .withColumn(
             "customer_id_clean",
-            trim(raw["customer_id"]),
+            trim(
+                raw[
+                    "customer_id"
+                ]
+            ),
         )
         .withColumn(
             "customer_name_clean",
-            trim(raw["customer_name"]),
+            trim(
+                raw[
+                    "customer_name"
+                ]
+            ),
         )
         .withColumn(
             "city_clean",
-            trim(raw["city"]),
+            trim(
+                raw["city"]
+            ),
         )
         .withColumn(
             "district_clean",
-            trim(raw["district"]),
+            trim(
+                raw[
+                    "district"
+                ]
+            ),
         )
     )
 
-    # --------------------------------
-    # 2. Safe date normalization
-    # --------------------------------
-
     date_text = trim(
-        raw["order_date"]
+        raw[
+            "order_date"
+        ]
     )
 
     df = df.withColumn(
@@ -112,47 +185,61 @@ def transform_spark_raw(raw_dataframe):
         coalesce(
             try_to_timestamp(
                 date_text,
-                lit("yyyy-MM-dd'T'HH:mm:ss"),
+                lit(
+                    "yyyy-MM-dd'T'HH:mm:ss"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("yyyy-MM-dd HH:mm:ss"),
+                lit(
+                    "yyyy-MM-dd HH:mm:ss"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("dd-MM-yyyy HH:mm:ss"),
+                lit(
+                    "dd-MM-yyyy HH:mm:ss"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("dd/MM/yyyy HH:mm:ss"),
+                lit(
+                    "dd/MM/yyyy HH:mm:ss"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("yyyy/MM/dd HH:mm:ss"),
+                lit(
+                    "yyyy/MM/dd HH:mm:ss"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("yyyy-MM-dd"),
+                lit(
+                    "yyyy-MM-dd"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("dd/MM/yyyy"),
+                lit(
+                    "dd/MM/yyyy"
+                ),
             ),
             try_to_timestamp(
                 date_text,
-                lit("yyyy/MM/dd"),
+                lit(
+                    "yyyy/MM/dd"
+                ),
             ),
         ),
     )
 
-    # --------------------------------
-    # 3. Phone normalization
-    # --------------------------------
-
     df = df.withColumn(
         "phone_clean",
         regexp_replace(
-            raw["customer_phone"],
+            raw[
+                "customer_phone"
+            ],
             r"\D",
             "",
         ),
@@ -161,20 +248,24 @@ def transform_spark_raw(raw_dataframe):
     df = df.withColumn(
         "phone_clean",
         when(
-            col("phone_clean").startswith("967"),
+            col(
+                "phone_clean"
+            ).startswith(
+                "967"
+            ),
             regexp_replace(
-                col("phone_clean"),
+                col(
+                    "phone_clean"
+                ),
                 r"^967",
                 "",
             ),
         ).otherwise(
-            col("phone_clean")
+            col(
+                "phone_clean"
+            )
         ),
     )
-
-    # --------------------------------
-    # 4. Email normalization
-    # --------------------------------
 
     df = df.withColumn(
         "email_clean",
@@ -182,7 +273,9 @@ def transform_spark_raw(raw_dataframe):
             trim(
                 regexp_replace(
                     regexp_replace(
-                        raw["customer_email"],
+                        raw[
+                            "customer_email"
+                        ],
                         r"@+",
                         "@",
                     ),
@@ -193,122 +286,156 @@ def transform_spark_raw(raw_dataframe):
         ),
     )
 
-    # --------------------------------
-    # 5. Status aliases
-    # --------------------------------
-
     df = df.withColumn(
         "status_clean",
         when(
-            trim(raw["status"]) == "مؤكد",
+            trim(
+                raw["status"]
+            )
+            == "مؤكد",
             "confirmed",
         )
         .when(
-            trim(raw["status"]) == "قيد الانتظار",
+            trim(
+                raw["status"]
+            )
+            == "قيد الانتظار",
             "pending",
         )
         .when(
-            trim(raw["status"]) == "مرتجع",
+            trim(
+                raw["status"]
+            )
+            == "مرتجع",
             "returned",
         )
         .otherwise(
-            trim(raw["status"])
+            trim(
+                raw["status"]
+            )
         ),
     )
-
-    # --------------------------------
-    # 6. Payment status aliases
-    # --------------------------------
 
     df = df.withColumn(
         "payment_status_clean",
         when(
-            trim(raw["payment_status"]).isin(
+            trim(
+                raw[
+                    "payment_status"
+                ]
+            ).isin(
                 "تم الدفع",
                 "مدفوع",
             ),
             "paid",
         )
         .when(
-            trim(raw["payment_status"]) == "بانتظار الدفع",
+            trim(
+                raw[
+                    "payment_status"
+                ]
+            )
+            == "بانتظار الدفع",
             "pending",
         )
         .otherwise(
-            trim(raw["payment_status"])
+            trim(
+                raw[
+                    "payment_status"
+                ]
+            )
         ),
     )
-
-    # --------------------------------
-    # 7. Currency normalization
-    # --------------------------------
 
     df = df.withColumn(
         "currency_clean",
         when(
-            trim(raw["currency"]).isin(
+            trim(
+                raw["currency"]
+            ).isin(
                 "ريال",
                 "ريال يمني",
             ),
             "YER",
         )
         .otherwise(
-            trim(raw["currency"])
+            trim(
+                raw["currency"]
+            )
         ),
     )
-
-    # --------------------------------
-    # 8. Numeric normalization
-    # --------------------------------
 
     df = (
         df
         .withColumn(
             "delivery_cost_clean",
             number_column(
-                raw["delivery_cost"]
+                raw[
+                    "delivery_cost"
+                ]
             ),
         )
         .withColumn(
             "payment_amount_clean",
             number_column(
-                raw["payment_amount"]
+                raw[
+                    "payment_amount"
+                ]
             ),
         )
         .withColumn(
             "total_amount_clean",
             number_column(
-                raw["total_amount"]
+                raw[
+                    "total_amount"
+                ]
             ),
         )
     )
 
-    # --------------------------------
-    # 9. Parse items JSON
-    # --------------------------------
-
     df = df.withColumn(
         "items_clean",
         from_json(
-            raw["items_json"],
+            raw[
+                "items_json"
+            ],
             ITEM_SCHEMA,
         ),
     )
 
-    # --------------------------------
-    # 10. Detect negative item values
-    # --------------------------------
-
     df = df.withColumn(
         "negative_item_flags",
         when(
-            col("items_clean").isNull(),
+            col(
+                "items_clean"
+            ).isNull(),
             array(),
         ).otherwise(
             transform(
-                col("items_clean"),
+                col(
+                    "items_clean"
+                ),
                 lambda item: when(
-                    (item["qty"] < 0)
-                    | (item["unit_price"] < 0),
+                    (
+                        item[
+                            "qty"
+                        ] < 0
+                    )
+                    | (
+                        item[
+                            "unit_price"
+                        ] < 0
+                    )
+                    | (
+                        item[
+                            "total"
+                        ].isNotNull()
+                        & (
+                            item[
+                                "total"
+                            ] < 0
+                        )
+                    ),
                     lit(1),
                 ).otherwise(
                     lit(0)
@@ -321,89 +448,254 @@ def transform_spark_raw(raw_dataframe):
         "negative_item_count",
         size(
             filter(
-                col("negative_item_flags"),
-                lambda x: x == 1,
+                col(
+                    "negative_item_flags"
+                ),
+                lambda x: (
+                    x == 1
+                ),
             )
         ),
     )
 
-    # --------------------------------
-    # 11. Error codes
-    # --------------------------------
+    df = df.withColumn(
+        "items_total_recomputed",
+        when(
+            col(
+                "items_clean"
+            ).isNull(),
+            None,
+        ).otherwise(
+            aggregate(
+                col(
+                    "items_clean"
+                ),
+                lit(0.0),
+                lambda acc, item: (
+                    acc
+                    + coalesce(
+                        item[
+                            "total"
+                        ],
+                        (
+                            item[
+                                "qty"
+                            ].cast(
+                                "double"
+                            )
+                            * item[
+                                "unit_price"
+                            ]
+                        ),
+                    )
+                ),
+            )
+        ),
+    )
+
+    df = df.withColumn(
+        "total_recomputed",
+        when(
+            col(
+                "items_total_recomputed"
+            ).isNotNull()
+            & col(
+                "delivery_cost_clean"
+            ).isNotNull()
+            & (
+                col(
+                    "negative_item_count"
+                ) == 0
+            ),
+            (
+                col(
+                    "items_total_recomputed"
+                )
+                + col(
+                    "delivery_cost_clean"
+                )
+            ),
+        ),
+    )
+
+    df = df.withColumn(
+        "total_should_recompute",
+        (
+            col(
+                "total_recomputed"
+            ).isNotNull()
+            & col(
+                "total_amount_clean"
+            ).isNotNull()
+            & (
+                spark_abs(
+                    col(
+                        "total_recomputed"
+                    )
+                    - col(
+                        "total_amount_clean"
+                    )
+                )
+                > lit(
+                    0.01
+                )
+            )
+        ),
+    )
+
+    df = df.withColumn(
+        "total_amount_final",
+        when(
+            col(
+                "total_should_recompute"
+            ),
+            col(
+                "total_recomputed"
+            ),
+        ).otherwise(
+            col(
+                "total_amount_clean"
+            )
+        ),
+    )
 
     df = df.withColumn(
         "error_codes_raw",
         array(
             when(
-                col("order_id_clean").isNull()
-                | (col("order_id_clean") == ""),
-                lit("ID_ORDER_MISSING"),
+                col(
+                    "order_id_clean"
+                ).isNull()
+                | (
+                    col(
+                        "order_id_clean"
+                    )
+                    == ""
+                ),
+                lit(
+                    "ID_ORDER_MISSING"
+                ),
             ),
 
             when(
-                col("customer_id_clean").isNull()
-                | (col("customer_id_clean") == ""),
-                lit("ID_CUSTOMER_MISSING"),
+                col(
+                    "customer_id_clean"
+                ).isNull()
+                | (
+                    col(
+                        "customer_id_clean"
+                    )
+                    == ""
+                ),
+                lit(
+                    "ID_CUSTOMER_MISSING"
+                ),
             ),
 
             when(
-                col("order_date_clean").isNull(),
-                lit("DATE_INVALID_IMPOSSIBLE"),
+                col(
+                    "order_date_clean"
+                ).isNull(),
+                lit(
+                    "DATE_INVALID_IMPOSSIBLE"
+                ),
             ),
 
             when(
-                raw["customer_phone"].isNotNull()
+                raw[
+                    "customer_phone"
+                ].isNotNull()
                 & (
-                    ~col("phone_clean").rlike(
+                    ~col(
+                        "phone_clean"
+                    ).rlike(
                         r"^\d{9}$"
                     )
                 ),
-                lit("PHONE_INVALID"),
+                lit(
+                    "PHONE_INVALID"
+                ),
             ),
 
             when(
-                raw["customer_email"].isNotNull()
+                raw[
+                    "customer_email"
+                ].isNotNull()
                 & (
-                    ~col("email_clean").rlike(
+                    ~col(
+                        "email_clean"
+                    ).rlike(
                         r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
                     )
                 ),
-                lit("EMAIL_INVALID"),
+                lit(
+                    "EMAIL_INVALID"
+                ),
             ),
 
             when(
-                col("delivery_cost_clean").isNull(),
-                lit("DELIVERY_COST_UNKNOWN"),
+                col(
+                    "delivery_cost_clean"
+                ).isNull(),
+                lit(
+                    "DELIVERY_COST_UNKNOWN"
+                ),
             ),
 
             when(
-                col("payment_amount_clean").isNull(),
-                lit("PAYMENT_AMOUNT_UNKNOWN"),
+                col(
+                    "payment_amount_clean"
+                ).isNull(),
+                lit(
+                    "PAYMENT_AMOUNT_UNKNOWN"
+                ),
             ),
 
             when(
-                col("total_amount_clean").isNull(),
-                lit("PRICE_UNKNOWN"),
+                col(
+                    "total_amount_clean"
+                ).isNull(),
+                lit(
+                    "PRICE_UNKNOWN"
+                ),
             ),
 
             when(
-                raw["items_json"].isNull()
+                raw[
+                    "items_json"
+                ].isNull()
                 | (
-                    trim(raw["items_json"])
+                    trim(
+                        raw[
+                            "items_json"
+                        ]
+                    )
                     == ""
                 ),
-                lit("ITEMS_EMPTY"),
+                lit(
+                    "ITEMS_EMPTY"
+                ),
             ),
 
             when(
-                raw["items_json"].isNotNull()
-                & col("items_clean").isNull(),
-                lit("JSON_ITEMS_CORRUPTED"),
+                raw[
+                    "items_json"
+                ].isNotNull()
+                & col(
+                    "items_clean"
+                ).isNull(),
+                lit(
+                    "JSON_ITEMS_CORRUPTED"
+                ),
             ),
 
             when(
-                col("negative_item_count") > 0,
-                lit("VALUE_NEGATIVE_AMBIGUOUS"),
+                col(
+                    "negative_item_count"
+                ) > 0,
+                lit(
+                    "VALUE_NEGATIVE_AMBIGUOUS"
+                ),
             ),
         ),
     )
@@ -411,122 +703,277 @@ def transform_spark_raw(raw_dataframe):
     df = df.withColumn(
         "error_codes",
         filter(
-            col("error_codes_raw"),
-            lambda x: x.isNotNull(),
+            col(
+                "error_codes_raw"
+            ),
+            lambda x: (
+                x.isNotNull()
+            ),
         ),
     )
-
-    # --------------------------------
-    # 12. Audit trail
-    # --------------------------------
 
     df = df.withColumn(
         "corrections_raw",
         array(
             when(
                 ~trim(
-                    raw["order_date"]
+                    raw[
+                        "order_date"
+                    ]
                 ).rlike(
                     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
                 )
-                & raw["order_date"].isNotNull()
-                & col("order_date_clean").isNotNull(),
+                & raw[
+                    "order_date"
+                ].isNotNull()
+                & col(
+                    "order_date_clean"
+                ).isNotNull(),
                 concat(
-                    lit("DATE_NORMALIZE: "),
-                    raw["order_date"],
-                    lit(" -> "),
+                    lit(
+                        "DATE_NORMALIZE: "
+                    ),
+                    raw[
+                        "order_date"
+                    ],
+                    lit(
+                        " -> "
+                    ),
                     col(
                         "order_date_clean"
-                    ).cast("string"),
+                    ).cast(
+                        "string"
+                    ),
                 ),
             ),
 
             when(
-                raw["customer_phone"]
-                != col("phone_clean"),
+                raw[
+                    "customer_phone"
+                ]
+                != col(
+                    "phone_clean"
+                ),
                 concat(
-                    lit("PHONE_NORMALIZE: "),
-                    raw["customer_phone"],
-                    lit(" -> "),
-                    col("phone_clean"),
+                    lit(
+                        "PHONE_NORMALIZE: "
+                    ),
+                    raw[
+                        "customer_phone"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "phone_clean"
+                    ),
                 ),
             ),
 
             when(
                 lower(
                     trim(
-                        raw["customer_email"]
+                        raw[
+                            "customer_email"
+                        ]
                     )
                 )
-                != col("email_clean"),
+                != col(
+                    "email_clean"
+                ),
                 concat(
-                    lit("EMAIL_NORMALIZE: "),
-                    raw["customer_email"],
-                    lit(" -> "),
-                    col("email_clean"),
+                    lit(
+                        "EMAIL_NORMALIZE: "
+                    ),
+                    raw[
+                        "customer_email"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "email_clean"
+                    ),
                 ),
             ),
 
             when(
-                trim(raw["status"])
-                != col("status_clean"),
+                trim(
+                    raw[
+                        "status"
+                    ]
+                )
+                != col(
+                    "status_clean"
+                ),
                 concat(
-                    lit("STATUS_ALIAS: "),
-                    raw["status"],
-                    lit(" -> "),
-                    col("status_clean"),
+                    lit(
+                        "STATUS_ALIAS: "
+                    ),
+                    raw[
+                        "status"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "status_clean"
+                    ),
                 ),
             ),
 
             when(
-                trim(raw["payment_status"])
-                != col("payment_status_clean"),
+                trim(
+                    raw[
+                        "payment_status"
+                    ]
+                )
+                != col(
+                    "payment_status_clean"
+                ),
                 concat(
-                    lit("PAYMENT_STATUS_ALIAS: "),
-                    raw["payment_status"],
-                    lit(" -> "),
-                    col("payment_status_clean"),
+                    lit(
+                        "PAYMENT_STATUS_ALIAS: "
+                    ),
+                    raw[
+                        "payment_status"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "payment_status_clean"
+                    ),
                 ),
             ),
 
             when(
-                trim(raw["currency"])
-                != col("currency_clean"),
+                trim(
+                    raw[
+                        "currency"
+                    ]
+                )
+                != col(
+                    "currency_clean"
+                ),
                 concat(
-                    lit("CURRENCY_NORMALIZE: "),
-                    raw["currency"],
-                    lit(" -> "),
-                    col("currency_clean"),
+                    lit(
+                        "CURRENCY_NORMALIZE: "
+                    ),
+                    raw[
+                        "currency"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "currency_clean"
+                    ),
                 ),
             ),
 
             when(
-                raw["delivery_cost"]
+                raw[
+                    "delivery_cost"
+                ]
                 != col(
                     "delivery_cost_clean"
-                ).cast("string"),
-                lit(
-                    "NUMBER_NORMALIZE: delivery_cost"
+                ).cast(
+                    "string"
+                ),
+                concat(
+                    lit(
+                        "NUMBER_NORMALIZE: "
+                    ),
+                    raw[
+                        "delivery_cost"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "delivery_cost_clean"
+                    ).cast(
+                        "string"
+                    ),
                 ),
             ),
 
             when(
-                raw["payment_amount"]
+                raw[
+                    "payment_amount"
+                ]
                 != col(
                     "payment_amount_clean"
-                ).cast("string"),
-                lit(
-                    "NUMBER_NORMALIZE: payment_amount"
+                ).cast(
+                    "string"
+                ),
+                concat(
+                    lit(
+                        "NUMBER_NORMALIZE: "
+                    ),
+                    raw[
+                        "payment_amount"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "payment_amount_clean"
+                    ).cast(
+                        "string"
+                    ),
                 ),
             ),
 
             when(
-                raw["total_amount"]
+                raw[
+                    "total_amount"
+                ]
                 != col(
                     "total_amount_clean"
-                ).cast("string"),
-                lit(
-                    "NUMBER_NORMALIZE: total_amount"
+                ).cast(
+                    "string"
+                ),
+                concat(
+                    lit(
+                        "NUMBER_NORMALIZE: "
+                    ),
+                    raw[
+                        "total_amount"
+                    ],
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "total_amount_clean"
+                    ).cast(
+                        "string"
+                    ),
+                ),
+            ),
+
+            when(
+                col(
+                    "total_should_recompute"
+                ),
+                concat(
+                    lit(
+                        "TOTAL_RECOMPUTE: "
+                    ),
+                    col(
+                        "total_amount_clean"
+                    ).cast(
+                        "string"
+                    ),
+                    lit(
+                        " -> "
+                    ),
+                    col(
+                        "total_recomputed"
+                    ).cast(
+                        "string"
+                    ),
                 ),
             ),
         ),
@@ -535,57 +982,71 @@ def transform_spark_raw(raw_dataframe):
     df = df.withColumn(
         "corrections",
         filter(
-            col("corrections_raw"),
-            lambda x: x.isNotNull(),
+            col(
+                "corrections_raw"
+            ),
+            lambda x: (
+                x.isNotNull()
+            ),
         ),
     )
-
-    # --------------------------------
-    # 13. Quarantine
-    # --------------------------------
 
     quarantine_df = (
         df
         .filter(
             size(
-                col("error_codes")
+                col(
+                    "error_codes"
+                )
             ) > 0
         )
         .select(
             "run_id",
-            raw["order_id"].alias(
+
+            raw[
+                "order_id"
+            ].alias(
                 "order_id"
             ),
+
             "error_codes",
-            col("error_codes").alias(
+
+            col(
+                "error_codes"
+            ).alias(
                 "error_details"
             ),
+
             raw.alias(
                 "raw_record"
             ),
         )
     )
 
-    # --------------------------------
-    # 14. Valid / Corrected
-    # --------------------------------
-
     valid_candidates_df = (
         df
         .filter(
             size(
-                col("error_codes")
+                col(
+                    "error_codes"
+                )
             ) == 0
         )
         .withColumn(
             "quality_status",
             when(
                 size(
-                    col("corrections")
+                    col(
+                        "corrections"
+                    )
                 ) > 0,
-                lit("corrected"),
+                lit(
+                    "corrected"
+                ),
             ).otherwise(
-                lit("valid")
+                lit(
+                    "valid"
+                )
             ),
         )
         .select(
@@ -682,7 +1143,7 @@ def transform_spark_raw(raw_dataframe):
             ),
 
             col(
-                "total_amount_clean"
+                "total_amount_final"
             ).alias(
                 "total_amount"
             ),

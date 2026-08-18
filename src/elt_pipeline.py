@@ -16,17 +16,31 @@ from src.quality_rules import (
     normalize_email,
     normalize_phone,
     normalize_status,
+    recompute_total,
     validate_items,
 )
 
 
 def process_raw_run(run_id):
-    client = MongoClient(MONGODB_URI)
-    database = client[DATABASE_NAME]
+    client = MongoClient(
+        MONGODB_URI
+    )
 
-    raw_collection = database[RAW_COLLECTION]
-    validated_collection = database[VALIDATED_COLLECTION]
-    quarantine_collection = database[QUARANTINE_COLLECTION]
+    database = client[
+        DATABASE_NAME
+    ]
+
+    raw_collection = database[
+        RAW_COLLECTION
+    ]
+
+    validated_collection = database[
+        VALIDATED_COLLECTION
+    ]
+
+    quarantine_collection = database[
+        QUARANTINE_COLLECTION
+    ]
 
     valid_count = 0
     corrected_count = 0
@@ -39,45 +53,65 @@ def process_raw_run(run_id):
     error_counts = {}
 
     try:
-        # Stable Business Key
         validated_collection.create_index(
             "order_id",
             unique=True,
         )
 
-        # Process only raw records belonging to this run
         raw_records = raw_collection.find(
-            {"run_id": run_id}
+            {
+                "run_id": run_id
+            }
         )
 
         for raw_document in raw_records:
-            record = raw_document["raw_record"]
+            record = raw_document[
+                "raw_record"
+            ]
 
             corrections = []
             errors = []
 
-            # --------------------------------
-            # Required business identifiers
-            # --------------------------------
+            order_id = record.get(
+                "order_id"
+            )
 
-            order_id = record.get("order_id")
-            customer_id = record.get("customer_id")
+            if order_id is not None:
+                order_id = str(
+                    order_id
+                ).strip()
+
+            customer_id = record.get(
+                "customer_id"
+            )
+
+            if customer_id is not None:
+                customer_id = str(
+                    customer_id
+                ).strip()
 
             if not order_id:
-                errors.append("ID_ORDER_MISSING")
+                errors.append(
+                    "ID_ORDER_MISSING"
+                )
 
             if not customer_id:
-                errors.append("ID_CUSTOMER_MISSING")
+                errors.append(
+                    "ID_CUSTOMER_MISSING"
+                )
 
-            # --------------------------------
-            # Date
-            # --------------------------------
+            original_date = record.get(
+                "order_date"
+            )
 
-            original_date = record.get("order_date")
-            cleaned_date = normalize_date(original_date)
+            cleaned_date = normalize_date(
+                original_date
+            )
 
             if not cleaned_date:
-                errors.append("DATE_INVALID_IMPOSSIBLE")
+                errors.append(
+                    "DATE_INVALID_IMPOSSIBLE"
+                )
 
             add_correction(
                 corrections,
@@ -87,26 +121,34 @@ def process_raw_run(run_id):
                 "DATE_NORMALIZE",
             )
 
-            # --------------------------------
-            # Items JSON
-            # --------------------------------
-
-            items, items_error = validate_items(
-                record.get("items_json")
+            items, items_error = (
+                validate_items(
+                    record.get(
+                        "items_json"
+                    )
+                )
             )
 
             if items_error:
-                errors.append(items_error)
+                errors.append(
+                    items_error
+                )
 
-            # --------------------------------
-            # Phone
-            # --------------------------------
+            original_phone = record.get(
+                "customer_phone"
+            )
 
-            original_phone = record.get("customer_phone")
-            cleaned_phone = normalize_phone(original_phone)
+            cleaned_phone = normalize_phone(
+                original_phone
+            )
 
-            if original_phone and not cleaned_phone:
-                errors.append("PHONE_INVALID")
+            if (
+                original_phone
+                and not cleaned_phone
+            ):
+                errors.append(
+                    "PHONE_INVALID"
+                )
 
             add_correction(
                 corrections,
@@ -116,15 +158,21 @@ def process_raw_run(run_id):
                 "PHONE_NORMALIZE",
             )
 
-            # --------------------------------
-            # Email
-            # --------------------------------
+            original_email = record.get(
+                "customer_email"
+            )
 
-            original_email = record.get("customer_email")
-            cleaned_email = normalize_email(original_email)
+            cleaned_email = normalize_email(
+                original_email
+            )
 
-            if original_email and not cleaned_email:
-                errors.append("EMAIL_INVALID")
+            if (
+                original_email
+                and not cleaned_email
+            ):
+                errors.append(
+                    "EMAIL_INVALID"
+                )
 
             add_correction(
                 corrections,
@@ -134,12 +182,13 @@ def process_raw_run(run_id):
                 "EMAIL_REPEATED_SYMBOLS",
             )
 
-            # --------------------------------
-            # Order status
-            # --------------------------------
+            original_status = record.get(
+                "status"
+            )
 
-            original_status = record.get("status")
-            cleaned_status = normalize_status(original_status)
+            cleaned_status = normalize_status(
+                original_status
+            )
 
             add_correction(
                 corrections,
@@ -149,16 +198,16 @@ def process_raw_run(run_id):
                 "STATUS_ALIAS",
             )
 
-            # --------------------------------
-            # Payment status
-            # --------------------------------
-
-            original_payment_status = record.get(
-                "payment_status"
+            original_payment_status = (
+                record.get(
+                    "payment_status"
+                )
             )
 
-            cleaned_payment_status = normalize_status(
-                original_payment_status
+            cleaned_payment_status = (
+                normalize_status(
+                    original_payment_status
+                )
             )
 
             add_correction(
@@ -169,14 +218,14 @@ def process_raw_run(run_id):
                 "PAYMENT_STATUS_ALIAS",
             )
 
-            # --------------------------------
-            # Currency
-            # --------------------------------
+            original_currency = record.get(
+                "currency"
+            )
 
-            original_currency = record.get("currency")
-
-            cleaned_currency = normalize_currency(
-                original_currency
+            cleaned_currency = (
+                normalize_currency(
+                    original_currency
+                )
             )
 
             add_correction(
@@ -187,15 +236,18 @@ def process_raw_run(run_id):
                 "CURRENCY_NORMALIZE",
             )
 
-            # --------------------------------
-            # Total amount
-            # --------------------------------
+            original_total = record.get(
+                "total_amount"
+            )
 
-            original_total = record.get("total_amount")
-            cleaned_total = clean_number(original_total)
+            cleaned_total = clean_number(
+                original_total
+            )
 
             if cleaned_total is None:
-                errors.append("PRICE_UNKNOWN")
+                errors.append(
+                    "PRICE_UNKNOWN"
+                )
 
             add_correction(
                 corrections,
@@ -205,20 +257,25 @@ def process_raw_run(run_id):
                 "NUMBER_NORMALIZE",
             )
 
-            # --------------------------------
-            # Payment amount
-            # --------------------------------
-
-            original_payment_amount = record.get(
-                "payment_amount"
+            original_payment_amount = (
+                record.get(
+                    "payment_amount"
+                )
             )
 
-            cleaned_payment_amount = clean_number(
-                original_payment_amount
+            cleaned_payment_amount = (
+                clean_number(
+                    original_payment_amount
+                )
             )
 
-            if cleaned_payment_amount is None:
-                errors.append("PAYMENT_AMOUNT_UNKNOWN")
+            if (
+                cleaned_payment_amount
+                is None
+            ):
+                errors.append(
+                    "PAYMENT_AMOUNT_UNKNOWN"
+                )
 
             add_correction(
                 corrections,
@@ -228,20 +285,25 @@ def process_raw_run(run_id):
                 "NUMBER_NORMALIZE",
             )
 
-            # --------------------------------
-            # Delivery cost
-            # --------------------------------
-
-            original_delivery_cost = record.get(
-                "delivery_cost"
+            original_delivery_cost = (
+                record.get(
+                    "delivery_cost"
+                )
             )
 
-            cleaned_delivery_cost = clean_number(
-                original_delivery_cost
+            cleaned_delivery_cost = (
+                clean_number(
+                    original_delivery_cost
+                )
             )
 
-            if cleaned_delivery_cost is None:
-                errors.append("DELIVERY_COST_UNKNOWN")
+            if (
+                cleaned_delivery_cost
+                is None
+            ):
+                errors.append(
+                    "DELIVERY_COST_UNKNOWN"
+                )
 
             add_correction(
                 corrections,
@@ -251,9 +313,34 @@ def process_raw_run(run_id):
                 "NUMBER_NORMALIZE",
             )
 
-            # --------------------------------
-            # Quarantine
-            # --------------------------------
+            recomputed_total = (
+                recompute_total(
+                    items,
+                    cleaned_delivery_cost,
+                )
+            )
+
+            if (
+                recomputed_total
+                is not None
+                and cleaned_total
+                is not None
+                and abs(
+                    recomputed_total
+                    - cleaned_total
+                ) > 0.01
+            ):
+                add_correction(
+                    corrections,
+                    "total_amount",
+                    cleaned_total,
+                    recomputed_total,
+                    "TOTAL_RECOMPUTE",
+                )
+
+                cleaned_total = (
+                    recomputed_total
+                )
 
             if errors:
                 quarantine_document = {
@@ -271,26 +358,31 @@ def process_raw_run(run_id):
                 quarantine_count += 1
 
                 for error in errors:
-                    error_counts[error] = (
-                        error_counts.get(error, 0) + 1
+                    error_counts[
+                        error
+                    ] = (
+                        error_counts.get(
+                            error,
+                            0,
+                        )
+                        + 1
                     )
 
                 continue
 
-            # --------------------------------
-            # Valid / Corrected classification
-            # --------------------------------
-
             if corrections:
-                quality_status = "corrected"
-                corrected_count += 1
-            else:
-                quality_status = "valid"
-                valid_count += 1
+                quality_status = (
+                    "corrected"
+                )
 
-            # --------------------------------
-            # Final validated document
-            # --------------------------------
+                corrected_count += 1
+
+            else:
+                quality_status = (
+                    "valid"
+                )
+
+                valid_count += 1
 
             final_document = {
                 "order_id": order_id,
@@ -302,71 +394,104 @@ def process_raw_run(run_id):
                 ),
                 "customer_phone": cleaned_phone,
                 "customer_email": cleaned_email,
-                "city": record.get("city"),
-                "district": record.get("district"),
+                "city": record.get(
+                    "city"
+                ),
+                "district": record.get(
+                    "district"
+                ),
                 "delivery_type": record.get(
                     "delivery_type"
                 ),
-                "delivery_cost": cleaned_delivery_cost,
+                "delivery_cost": (
+                    cleaned_delivery_cost
+                ),
                 "payment_method": record.get(
                     "payment_method"
                 ),
-                "payment_status": cleaned_payment_status,
-                "payment_amount": cleaned_payment_amount,
-                "currency": cleaned_currency,
-                "total_amount": cleaned_total,
+                "payment_status": (
+                    cleaned_payment_status
+                ),
+                "payment_amount": (
+                    cleaned_payment_amount
+                ),
+                "currency": (
+                    cleaned_currency
+                ),
+                "total_amount": (
+                    cleaned_total
+                ),
                 "items": items,
-                "quality_status": quality_status,
-                "corrections": corrections,
-
-                # Metadata only
-                "last_run_id": run_id,
+                "quality_status": (
+                    quality_status
+                ),
+                "corrections": (
+                    corrections
+                ),
+                "last_run_id": (
+                    run_id
+                ),
             }
 
-            # --------------------------------
-            # Idempotent Upsert
-            # --------------------------------
-
-            existing = validated_collection.find_one(
-                {"order_id": order_id}
+            existing = (
+                validated_collection.find_one(
+                    {
+                        "order_id": order_id
+                    }
+                )
             )
 
             if existing is None:
                 validated_collection.update_one(
-                    {"order_id": order_id},
-                    {"$set": final_document},
+                    {
+                        "order_id": order_id
+                    },
+                    {
+                        "$set": final_document
+                    },
                     upsert=True,
                 )
 
                 inserted_count += 1
 
             else:
-                # Remove MongoDB technical metadata
-                # from comparison
-                comparable_existing = dict(existing)
-                comparable_existing.pop("_id", None)
+                comparable_existing = dict(
+                    existing
+                )
 
-                # last_run_id changes every run.
-                # It must not make the business record
-                # appear updated.
+                comparable_existing.pop(
+                    "_id",
+                    None,
+                )
+
                 comparable_existing.pop(
                     "last_run_id",
                     None,
                 )
 
-                comparable_new = dict(final_document)
+                comparable_new = dict(
+                    final_document
+                )
+
                 comparable_new.pop(
                     "last_run_id",
                     None,
                 )
 
-                if comparable_existing == comparable_new:
+                if (
+                    comparable_existing
+                    == comparable_new
+                ):
                     unchanged_count += 1
 
                 else:
                     validated_collection.update_one(
-                        {"order_id": order_id},
-                        {"$set": final_document},
+                        {
+                            "order_id": order_id
+                        },
+                        {
+                            "$set": final_document
+                        },
                         upsert=True,
                     )
 

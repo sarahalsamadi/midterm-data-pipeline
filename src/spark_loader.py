@@ -8,18 +8,24 @@ from uuid import uuid4
 from pyspark.sql import (
     SparkSession,
 )
+
 from pyspark.sql.functions import (
     col,
+    concat_ws,
+    explode,
     lit,
     monotonically_increasing_id,
     row_number,
+    sha2,
     struct,
 )
+
 from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
 )
+
 from pyspark.sql.window import (
     Window,
 )
@@ -199,9 +205,60 @@ def write_mongodb(
     )
 
 
+def add_dedup_hash(
+    dataframe,
+):
+    business_columns = [
+        "order_id",
+        "order_date",
+        "status",
+        "customer_id",
+        "customer_name",
+        "customer_phone",
+        "customer_email",
+        "city",
+        "district",
+        "delivery_type",
+        "delivery_cost",
+        "payment_method",
+        "payment_status",
+        "payment_amount",
+        "currency",
+        "total_amount",
+        "quality_status",
+    ]
+
+    hash_columns = [
+        col(
+            column_name
+        ).cast(
+            "string"
+        )
+        for column_name
+        in business_columns
+    ]
+
+    return dataframe.withColumn(
+        "_dedup_hash",
+        sha2(
+            concat_ws(
+                "||",
+                *hash_columns
+            ),
+            256,
+        ),
+    )
+
+
 def deduplicate_validated(
     validated_dataframe,
 ):
+    deterministic_dataframe = (
+        add_dedup_hash(
+            validated_dataframe
+        )
+    )
+
     window = (
         Window
         .partitionBy(
@@ -210,12 +267,15 @@ def deduplicate_validated(
         .orderBy(
             col(
                 "order_date"
-            ).desc_nulls_last()
+            ).desc_nulls_last(),
+            col(
+                "_dedup_hash"
+            ).asc(),
         )
     )
 
     return (
-        validated_dataframe
+        deterministic_dataframe
         .withColumn(
             "_row_number",
             row_number().over(
@@ -225,11 +285,11 @@ def deduplicate_validated(
         .filter(
             col(
                 "_row_number"
-            )
-            == 1
+            ) == 1
         )
         .drop(
-            "_row_number"
+            "_row_number",
+            "_dedup_hash",
         )
     )
 
@@ -396,10 +456,74 @@ def load_large_csv_to_raw(
             .count()
         )
 
+        error_rows = (
+            quarantine_dataframe
+            .select(
+                explode(
+                    "error_codes"
+                ).alias(
+                    "error_code"
+                )
+            )
+            .groupBy(
+                "error_code"
+            )
+            .count()
+            .collect()
+        )
+
+        error_counts = {
+            row[
+                "error_code"
+            ]: row[
+                "count"
+            ]
+            for row
+            in error_rows
+        }
+
         accepted_before_dedup = (
             valid_candidates
             .count()
         )
+
+        corrected_count = (
+            valid_candidates
+            .filter(
+                col(
+                    "quality_status"
+                )
+                == "corrected"
+            )
+            .count()
+        )
+
+        valid_count = (
+            valid_candidates
+            .filter(
+                col(
+                    "quality_status"
+                )
+                == "valid"
+            )
+            .count()
+        )
+
+        classified_count = (
+            valid_count
+            + corrected_count
+            + quarantine_count
+        )
+
+        if (
+            classified_count
+            != raw_count
+        ):
+            raise RuntimeError(
+                "Consistency check failed: "
+                f"raw={raw_count}, "
+                f"classified={classified_count}"
+            )
 
         validated_dataframe = (
             deduplicate_validated(
@@ -416,33 +540,6 @@ def load_large_csv_to_raw(
         duplicate_count = (
             accepted_before_dedup
             - validated_unique_count
-        )
-
-        corrected_count = (
-            validated_dataframe
-            .filter(
-                col(
-                    "quality_status"
-                )
-                == "corrected"
-            )
-            .count()
-        )
-
-        valid_count = (
-            validated_dataframe
-            .filter(
-                col(
-                    "quality_status"
-                )
-                == "valid"
-            )
-            .count()
-        )
-
-        classified_count = (
-            accepted_before_dedup
-            + quarantine_count
         )
 
         print(
@@ -473,7 +570,14 @@ def load_large_csv_to_raw(
         print(
             f"Consistency check: "
             f"{raw_count} = "
-            f"{classified_count}"
+            f"{valid_count} + "
+            f"{corrected_count} + "
+            f"{quarantine_count}"
+        )
+
+        print(
+            f"Error counts: "
+            f"{error_counts}"
         )
 
         if quarantine_count > 0:
@@ -573,12 +677,20 @@ def load_large_csv_to_raw(
                 quarantine_count
             ),
 
+            "classified_count": (
+                classified_count
+            ),
+
             "duplicate_count": (
                 duplicate_count
             ),
 
             "validated_unique_count": (
                 validated_unique_count
+            ),
+
+            "error_counts": (
+                error_counts
             ),
 
             "inserted": (
@@ -649,5 +761,6 @@ def load_large_csv_to_raw(
 
         try:
             spark.stop()
+
         except Exception:
             pass
