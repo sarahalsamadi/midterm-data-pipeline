@@ -5,7 +5,7 @@ from datetime import datetime
 
 ARABIC_DIGITS = str.maketrans(
     "٠١٢٣٤٥٦٧٨٩٫٬",
-    "0123456789.,"
+    "0123456789.,",
 )
 
 KNOWN_PRICE_WORDS = {
@@ -191,9 +191,29 @@ def normalize_status(value):
     )
 
 
+def normalize_item_number(value):
+    if value is None:
+        return None
+
+    if isinstance(
+        value,
+        (int, float),
+    ):
+        return float(
+            value
+        )
+
+    return clean_number(
+        value
+    )
+
+
 def validate_items(items_json):
     if not items_json:
-        return None, "ITEMS_EMPTY"
+        return (
+            None,
+            "ITEMS_EMPTY",
+        )
 
     try:
         items = json.loads(
@@ -219,7 +239,12 @@ def validate_items(items_json):
         )
 
     if not items:
-        return None, "ITEMS_EMPTY"
+        return (
+            None,
+            "ITEMS_EMPTY",
+        )
+
+    normalized_items = []
 
     for item in items:
         if not isinstance(
@@ -231,21 +256,27 @@ def validate_items(items_json):
                 "JSON_ITEMS_CORRUPTED",
             )
 
-        qty = item.get(
-            "qty"
+        qty = normalize_item_number(
+            item.get(
+                "qty"
+            )
         )
 
-        price = item.get(
-            "unit_price"
+        unit_price = normalize_item_number(
+            item.get(
+                "unit_price"
+            )
         )
 
-        item_total = item.get(
-            "total"
+        item_total = normalize_item_number(
+            item.get(
+                "total"
+            )
         )
 
         if (
             qty is None
-            or price is None
+            or unit_price is None
         ):
             return (
                 None,
@@ -254,7 +285,7 @@ def validate_items(items_json):
 
         if (
             qty < 0
-            or price < 0
+            or unit_price < 0
         ):
             return (
                 None,
@@ -270,7 +301,31 @@ def validate_items(items_json):
                 "VALUE_NEGATIVE_AMBIGUOUS",
             )
 
-    return items, None
+        normalized_item = dict(
+            item
+        )
+
+        normalized_item[
+            "qty"
+        ] = qty
+
+        normalized_item[
+            "unit_price"
+        ] = unit_price
+
+        if item_total is not None:
+            normalized_item[
+                "total"
+            ] = item_total
+
+        normalized_items.append(
+            normalized_item
+        )
+
+    return (
+        normalized_items,
+        None,
+    )
 
 
 def recompute_total(
@@ -286,22 +341,32 @@ def recompute_total(
     items_total = 0.0
 
     for item in items:
-        qty = item.get(
-            "qty"
+        qty = normalize_item_number(
+            item.get(
+                "qty"
+            )
         )
 
-        unit_price = item.get(
-            "unit_price"
+        unit_price = normalize_item_number(
+            item.get(
+                "unit_price"
+            )
         )
 
-        item_total = item.get(
-            "total"
+        item_total = normalize_item_number(
+            item.get(
+                "total"
+            )
         )
 
         if (
             qty is None
             or unit_price is None
-            or qty < 0
+        ):
+            return None
+
+        if (
+            qty < 0
             or unit_price < 0
         ):
             return None
@@ -310,17 +375,19 @@ def recompute_total(
             if item_total < 0:
                 return None
 
-            items_total += float(
+            items_total += (
                 item_total
             )
 
         else:
             items_total += (
-                float(qty)
-                * float(unit_price)
+                qty
+                * unit_price
             )
 
     return (
         items_total
-        + float(delivery_cost)
+        + float(
+            delivery_cost
+        )
     )
