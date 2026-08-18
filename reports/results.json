@@ -1,0 +1,27 @@
+[
+  {
+    "run_id": "de484754-d56b-4f0b-9f86-5be64696100d",
+    "file_name": "orders_test_10.csv",
+    "file_size_mb": 0.0,
+    "engine_used": "python_batch",
+    "read_rows": 10,
+    "loaded_raw": 10,
+    "count_valid": 0,
+    "count_corrected": 8,
+    "count_quarantine": 2,
+    "seconds_elapsed": 0.0285,
+    "throughput": 350.83,
+    "batch_size": 5000,
+    "batch_count": 1,
+    "counts_case_error": {
+      "VALUE_NEGATIVE_AMBIGUOUS": 1,
+      "ID_CUSTOMER_MISSING": 1,
+      "JSON_ITEMS_CORRUPTED": 1,
+      "PRICE_UNKNOWN": 1
+    },
+    "count_inserted": 0,
+    "count_updated": 0,
+    "count_unchanged": 8,
+    "recorded_at": "2026-08-18T10:32:18.653542+00:00"
+  }
+]
