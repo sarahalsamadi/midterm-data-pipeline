@@ -1,6 +1,14 @@
+import time
+
 from pymongo import (
     MongoClient,
     UpdateOne,
+)
+
+from pymongo.errors import (
+    AutoReconnect,
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
 )
 
 from config.settings import (
@@ -10,7 +18,11 @@ from config.settings import (
 )
 
 
-UPSERT_BATCH_SIZE = 1000
+UPSERT_BATCH_SIZE = 500
+UPSERT_PARTITIONS = 8
+
+MAX_RETRIES = 5
+RETRY_BASE_DELAY_SECONDS = 2
 
 
 BUSINESS_FIELDS = [
@@ -70,6 +82,56 @@ def business_documents_equal(
         existing_business
         == incoming_business
     )
+
+
+def execute_bulk_with_retry(
+    collection,
+    operations,
+):
+    if not operations:
+        return
+
+    last_error = None
+
+    for attempt in range(
+        1,
+        MAX_RETRIES + 1,
+    ):
+        try:
+            collection.bulk_write(
+                operations,
+                ordered=False,
+            )
+
+            return
+
+        except (
+            AutoReconnect,
+            NetworkTimeout,
+            ServerSelectionTimeoutError,
+        ) as exc:
+            last_error = exc
+
+            if attempt >= MAX_RETRIES:
+                break
+
+            delay = (
+                RETRY_BASE_DELAY_SECONDS
+                * attempt
+            )
+
+            print(
+                "MongoDB temporary connection "
+                f"failure. Retry {attempt}/"
+                f"{MAX_RETRIES} after "
+                f"{delay} sec."
+            )
+
+            time.sleep(
+                delay
+            )
+
+    raise last_error
 
 
 def process_batch(
@@ -159,11 +221,10 @@ def process_batch(
             )
         )
 
-    if operations:
-        collection.bulk_write(
-            operations,
-            ordered=False,
-        )
+    execute_bulk_with_retry(
+        collection,
+        operations,
+    )
 
     return {
         "inserted": inserted,
@@ -184,7 +245,15 @@ def upsert_and_count_partition(
     try:
         client = MongoClient(
             MONGODB_URI,
-            serverSelectionTimeoutMS=10000,
+            serverSelectionTimeoutMS=15000,
+            connectTimeoutMS=15000,
+            socketTimeoutMS=120000,
+            maxPoolSize=4,
+            retryWrites=True,
+        )
+
+        client.admin.command(
+            "ping"
         )
 
         database = client[
@@ -273,8 +342,21 @@ def upsert_and_count_partition(
 
 def distributed_upsert(
     validated_dataframe,
-    partitions=32,
+    partitions=UPSERT_PARTITIONS,
 ):
+    print(
+        "\n=== MongoDB Upsert Settings ==="
+    )
+
+    print(
+        f"Upsert partitions: {partitions}"
+    )
+
+    print(
+        f"Upsert batch size: "
+        f"{UPSERT_BATCH_SIZE}"
+    )
+
     repartitioned = (
         validated_dataframe
         .repartition(
@@ -315,4 +397,7 @@ def distributed_upsert(
         "updated": updated,
         "unchanged": unchanged,
         "upsert_partitions": partitions,
+        "upsert_batch_size": (
+            UPSERT_BATCH_SIZE
+        ),
     }

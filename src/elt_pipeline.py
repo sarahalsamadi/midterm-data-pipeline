@@ -21,6 +21,58 @@ from src.quality_rules import (
 )
 
 
+BUSINESS_FIELDS = [
+    "order_id",
+    "order_date",
+    "status",
+    "customer_id",
+    "customer_name",
+    "customer_phone",
+    "customer_email",
+    "city",
+    "district",
+    "delivery_type",
+    "delivery_cost",
+    "payment_method",
+    "payment_status",
+    "payment_amount",
+    "currency",
+    "total_amount",
+    "items",
+    "quality_status",
+    "corrections",
+]
+
+
+def normalize_business_document(
+    document,
+):
+    result = {}
+
+    for field in BUSINESS_FIELDS:
+        if field in document:
+            result[field] = document[
+                field
+            ]
+
+    return result
+
+
+def business_documents_equal(
+    existing_document,
+    incoming_document,
+):
+    return (
+        normalize_business_document(
+            existing_document
+        )
+        ==
+        normalize_business_document(
+            incoming_document
+        )
+    )
+
+
 def process_raw_run(run_id):
     client = MongoClient(
         MONGODB_URI
@@ -53,11 +105,6 @@ def process_raw_run(run_id):
     error_counts = {}
 
     try:
-        # validated_collection.create_index(
-        #     "order_id",
-        #     unique=True,
-        # )
-
         raw_records = raw_collection.find(
             {
                 "run_id": run_id
@@ -454,48 +501,24 @@ def process_raw_run(run_id):
 
                 inserted_count += 1
 
+            elif business_documents_equal(
+                existing,
+                final_document,
+            ):
+                unchanged_count += 1
+
             else:
-                comparable_existing = dict(
-                    existing
+                validated_collection.update_one(
+                    {
+                        "order_id": order_id
+                    },
+                    {
+                        "$set": final_document
+                    },
+                    upsert=True,
                 )
 
-                comparable_existing.pop(
-                    "_id",
-                    None,
-                )
-
-                comparable_existing.pop(
-                    "last_run_id",
-                    None,
-                )
-
-                comparable_new = dict(
-                    final_document
-                )
-
-                comparable_new.pop(
-                    "last_run_id",
-                    None,
-                )
-
-                if (
-                    comparable_existing
-                    == comparable_new
-                ):
-                    unchanged_count += 1
-
-                else:
-                    validated_collection.update_one(
-                        {
-                            "order_id": order_id
-                        },
-                        {
-                            "$set": final_document
-                        },
-                        upsert=True,
-                    )
-
-                    updated_count += 1
+                updated_count += 1
 
         return {
             "valid": valid_count,

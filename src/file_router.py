@@ -10,15 +10,43 @@ def get_file_size_mb(file_path):
 
 
 def choose_engine(file_path):
-    file_size_mb = get_file_size_mb(file_path)
+    file_size_mb = get_file_size_mb(
+        file_path
+    )
 
     if file_size_mb <= SMALL_FILE_THRESHOLD_MB:
         engine = "python_batch"
+
+        reason = (
+            f"File size {file_size_mb:.2f} MB "
+            f"is less than or equal to the "
+            f"{SMALL_FILE_THRESHOLD_MB} MB threshold."
+        )
+
     else:
         engine = "pyspark"
 
-    print(f"File size: {file_size_mb:.2f} MB")
-    print(f"Threshold: {SMALL_FILE_THRESHOLD_MB} MB")
-    print(f"Selected engine: {engine}")
+        reason = (
+            f"File size {file_size_mb:.2f} MB "
+            f"is greater than the "
+            f"{SMALL_FILE_THRESHOLD_MB} MB threshold."
+        )
+
+    print(
+        f"File size: {file_size_mb:.2f} MB"
+    )
+
+    print(
+        f"Threshold: "
+        f"{SMALL_FILE_THRESHOLD_MB} MB"
+    )
+
+    print(
+        f"Selected engine: {engine}"
+    )
+
+    print(
+        f"Reason: {reason}"
+    )
 
     return engine

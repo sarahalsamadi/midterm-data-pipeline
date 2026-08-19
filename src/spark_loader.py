@@ -593,7 +593,6 @@ def load_large_csv_to_raw(
         upsert_result = (
             distributed_upsert(
                 validated_dataframe,
-                partitions=32,
             )
         )
 
