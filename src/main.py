@@ -30,6 +30,7 @@ from src.spark_loader import (
     load_large_csv_to_raw,
 )
 
+DEFAULT_INPUT_FILE = "data/orders_test_10.csv"
 
 def main():
     parser = argparse.ArgumentParser(
@@ -40,7 +41,7 @@ def main():
 
     parser.add_argument(
         "--input",
-        required=True,
+        default=DEFAULT_INPUT_FILE,
         help="Path to the CSV file.",
     )
 

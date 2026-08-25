@@ -5,6 +5,8 @@ from datetime import (
 )
 from uuid import uuid4
 
+from pyspark import StorageLevel
+
 from pyspark.sql import (
     SparkSession,
 )
@@ -171,6 +173,10 @@ def create_spark_session():
             "spark.sql.shuffle.partitions",
             "64",
         )
+        .config(
+        "spark.local.dir",
+        "/mnt/d/spark-temp",
+    )
         .getOrCreate()
     )
 
@@ -415,7 +421,7 @@ def load_large_csv_to_raw(
                 "engine_used",
                 "raw_record",
             )
-            .cache()
+            .persist(StorageLevel.DISK_ONLY)
         )
 
         raw_count = (
@@ -443,12 +449,12 @@ def load_large_csv_to_raw(
 
         valid_candidates = (
             valid_candidates
-            .cache()
+            .persist(StorageLevel.DISK_ONLY)
         )
 
         quarantine_dataframe = (
             quarantine_dataframe
-            .cache()
+            .persist(StorageLevel.DISK_ONLY)
         )
 
         quarantine_count = (
@@ -529,7 +535,7 @@ def load_large_csv_to_raw(
             deduplicate_validated(
                 valid_candidates
             )
-            .cache()
+            .persist(StorageLevel.DISK_ONLY)
         )
 
         validated_unique_count = (
