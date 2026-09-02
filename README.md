@@ -1,261 +1,326 @@
 # Midterm Data Pipeline
 
-Hybrid order-data processing pipeline using Python Batch, Apache Spark, MongoDB, ELT, Data Quality, Idempotent Upsert, Quarantine handling, and performance metrics.
+Hybrid order-data processing pipeline using **Python Batch**, **Apache Spark**, **MongoDB**, **ELT**, **Data Quality**, **Quarantine**, **Idempotent Upsert**, deterministic deduplication, and execution metrics.
+
+The project is designed for mixed-quality e-commerce order data and follows one core rule:
+
+> Every input record is loaded to the Raw layer first. No bad record is silently dropped.
+
+The pipeline automatically selects the processing engine according to the input file size and then applies the same business-quality policy regardless of the selected engine.
+
+---
+
+## Table of Contents
+
+1. [Project Goal](#project-goal)
+2. [Architecture](#architecture)
+3. [Project Structure](#project-structure)
+4. [Engine Selection](#engine-selection)
+5. [Python Batch Path](#python-batch-path)
+6. [PySpark Path](#pyspark-path)
+7. [ELT Raw-First Design](#elt-raw-first-design)
+8. [Data Quality Rules](#data-quality-rules)
+9. [Correction Audit Trail](#correction-audit-trail)
+10. [Quarantine](#quarantine)
+11. [MongoDB Design](#mongodb-design)
+12. [Deduplication](#deduplication)
+13. [Idempotency and Upsert](#idempotency-and-upsert)
+14. [Metrics](#metrics)
+15. [Environment Setup](#environment-setup)
+16. [Run Commands](#run-commands)
+17. [Generate Test Samples](#generate-test-samples)
+18. [Automated Tests](#automated-tests)
+19. [Recorded Results](#recorded-results)
+20. [Execution Evidence](#execution-evidence)
+21. [Batch vs PySpark Comparison](#batch-vs-pyspark-comparison)
+22. [Data Integrity Policy](#data-integrity-policy)
+23. [Repository Data Policy](#repository-data-policy)
+
+---
 
 ## Project Goal
 
-The pipeline processes mixed-quality order data while ensuring that no input record is silently lost.
+The project implements a reusable hybrid data pipeline for large mixed-quality order datasets.
 
-Every raw record is loaded first and is then classified as one of:
+The pipeline must:
 
-- Valid
-- Corrected
-- Quarantine
+- process small files using memory-safe Python batch loading;
+- process large files using Apache Spark;
+- load every source row into MongoDB Raw before cleaning;
+- distinguish safe corrections from unsafe or ambiguous data;
+- preserve a correction audit trail;
+- quarantine records that cannot be corrected safely;
+- prevent duplicate final business records;
+- support safe reruns through idempotent upsert;
+- record execution metrics and error counts;
+- provide practical evidence using MongoDB Compass, Spark UI, and recorded results.
 
-The pipeline automatically selects the processing engine according to input file size.
+Every Raw record must end in exactly one classification:
+
+```text
+Valid
+Corrected
+Quarantine
+```
+
+The pipeline enforces the consistency rule:
+
+```text
+Raw = Valid + Corrected + Quarantine
+```
 
 ---
 
 ## Architecture
 
 ```text
-CSV File
-   |
-   v
-File Router
-   |
-   +----------------------+
-   |                      |
-   v                      v
-Python Batch           PySpark
-Small Files            Large Files
-   |                      |
-   +----------+-----------+
-              |
-              v
-         orders_raw
-              |
-              v
-        ELT / Cleaning
-              |
-       +------+------+
-       |             |
-       v             v
-orders_validated  orders_quarantine
-       |
-       v
-Deduplication
-       |
-       v
-Idempotent Upsert
-       |
-       v
-reports/results.json
-Engine Selection
+                               CSV File
+                                  |
+                                  v
+                             File Router
+                                  |
+                    +-------------+-------------+
+                    |                           |
+                    v                           v
+              Python Batch                   PySpark
+               <= 200 MB                     > 200 MB
+                    |                           |
+                    +-------------+-------------+
+                                  |
+                                  v
+                             orders_raw
+                                  |
+                                  v
+                      Quality / Transformation
+                                  |
+                     +------------+------------+
+                     |                         |
+                     v                         v
+              Valid / Corrected            Quarantine
+                     |                         |
+                     |                         v
+                     |                 orders_quarantine
+                     |
+                     v
+             Deterministic Deduplication
+                     |
+                     v
+              Idempotent Upsert
+                     |
+                     v
+              orders_validated
+                     |
+                     v
+             reports/results.json
+```
+
+The architecture deliberately separates routing, loading, quality transformation, MongoDB setup, upsert, metrics, and testing.
+
+---
+
+## Project Structure
+
+```text
+midterm-data-pipeline/
+|
+|-- README.md
+|-- requirements.txt
+|-- .gitignore
+|
+|-- config/
+|   `-- settings.py
+|
+|-- data/
+|   `-- .gitkeep
+|
+|-- src/
+|   |-- __init__.py
+|   |-- main.py
+|   |-- file_router.py
+|   |-- create_small_sample.py
+|   |-- batch_loader.py
+|   |-- spark_loader.py
+|   |-- spark_transform.py
+|   |-- spark_upsert.py
+|   |-- quality_rules.py
+|   |-- elt_pipeline.py
+|   |-- mongo_setup.py
+|   `-- metrics.py
+|
+|-- tests/
+|   |-- test_consistency.py
+|   |-- test_file_router.py
+|   |-- test_idempotency_logic.py
+|   `-- test_quality_rules.py
+|
+|-- reports/
+|   |-- results.json
+|   |-- results.md
+|   `-- screenshots/
+|
+`-- docs/
+    `-- architecture.md
+```
+
+### Main responsibility of each source file
+
+| File | Responsibility |
+|---|---|
+| `src/main.py` | Single pipeline entry point and overall orchestration |
+| `src/file_router.py` | Selects Python Batch or PySpark according to file size |
+| `src/create_small_sample.py` | Generates controlled test samples without manual editing |
+| `src/batch_loader.py` | Streaming CSV to Raw MongoDB in configurable batches |
+| `src/spark_loader.py` | Large-file Spark orchestration, Raw load, counts and metrics |
+| `src/spark_transform.py` | Distributed DataFrame-based quality transformations |
+| `src/spark_upsert.py` | Distributed idempotent MongoDB upsert |
+| `src/quality_rules.py` | Deterministic Python quality and normalization rules |
+| `src/elt_pipeline.py` | Python Raw to quality classification to validated/quarantine |
+| `src/mongo_setup.py` | MongoDB collections, validator, indexes and connection checks |
+| `src/metrics.py` | Appends successful run metrics to `reports/results.json` |
+
+---
+
+## Engine Selection
 
 The default threshold is:
 
+```text
 200 MB
+```
 
 Selection logic:
 
+```text
 File size <= 200 MB
-    -> Python Batch
+    -> python_batch
 
 File size > 200 MB
-    -> PySpark
+    -> pyspark
+```
 
-The decision is based on file size, not file name.
+The decision is based on **file size**, not on the file name. The router prints file size, configured threshold, selected engine, and the reason for selection.
 
-This means any CSV file with the expected schema can be processed by the same pipeline.
+### Python Batch router evidence
 
-The router reports:
+![Python Batch Router](reports/screenshots/01-python-batch-router.png)
 
-File size
-Configured threshold
-Selected engine
-Reason for engine selection
+### PySpark router evidence
 
-Example:
+![PySpark Router](reports/screenshots/09-spark-router.png)
 
-File size: 5120.00 MB
-Threshold: 200 MB
-Selected engine: pyspark
-Reason: File size 5120.00 MB is greater than the 200 MB threshold.
-Python Batch Path
+The Spark demonstration file was `orders_spark_test.csv` with size `209.20 MB`, therefore `209.20 MB > 200 MB` and the router selected `pyspark`.
+
+---
+
+## Python Batch Path
 
 Files less than or equal to 200 MB are processed using the Python Batch path.
 
-The loader streams rows instead of loading the complete CSV file into memory.
+The loader uses `csv.DictReader` and does **not** load the full CSV into a Python list before Raw ingestion.
 
-Default batch size:
+The default configured batch size is:
 
+```text
 5000 rows
+```
 
-For example, a 12,000-row file is processed as:
+A 12,000-row test is processed as:
 
+```text
 Batch 1: 5000
 Batch 2: 5000
 Batch 3: 2000
+```
 
-Each run reports:
+For each batch the implementation records the batch number, row count, elapsed batch-write time, and **per-batch throughput**. If `insert_many` fails, the loader prints the batch number, number of affected rows, elapsed time, exception type, and original failure reason, then re-raises the exception so the failure is never hidden. At run level it records loaded Raw rows, total batch count, Raw-load time, Raw-load throughput, total pipeline time, and overall pipeline throughput.
 
-Batch number
-Rows processed
-Batch count
-Raw-load time
-Raw-load throughput
-Total pipeline time
-Overall throughput
-PySpark Path
+Example controlled output:
+
+```text
+Batch 1: 10 rows, 0.00 seconds
+Loaded raw rows: 10
+Total batches: 1
+Elapsed seconds: 0.01
+Throughput: 859.88 rows/second
+```
+
+The Python path loads Raw first, then the ELT pipeline processes only the records associated with the generated `run_id`.
+
+---
+
+## PySpark Path
 
 Files larger than 200 MB are processed using Apache Spark.
 
-The Spark implementation uses:
+The Spark implementation uses SparkSession, Spark DataFrame API, fixed input schema, String-based Raw fields, Spark partitions, MongoDB Spark Connector, DataFrame-based transformations, deterministic business-key deduplication, distributed MongoDB upsert, explicit persistence, and configurable SQL shuffle partitions.
 
-SparkSession
-DataFrame API
-Fixed input schema
-String-based raw fields
-Parallel partitions
-MongoDB Spark Connector
-Deterministic deduplication
-Distributed MongoDB upsert
-Explicit persistence strategy
-Configurable shuffle partitions
+**Pandas is not used for large-file processing.**
 
-Pandas is not used for large-file processing.
+### Fixed Raw Schema
 
-Spark Storage Strategy
+Raw fields are read using a fixed `StructType` schema. Sensitive dirty fields are kept as strings during Raw ingestion so malformed values are not destroyed by premature type coercion.
 
-Large DataFrames can exceed the available Java heap even when the source CSV itself fits on disk.
+### Spark Session Configuration
 
-Earlier memory-based caching caused:
-
-java.lang.OutOfMemoryError: Java heap space
-
-Therefore, reusable large Spark DataFrames use:
-
-StorageLevel.DISK_ONLY
-
-instead of relying on memory caching.
-
-Conceptually:
-
-Large DataFrame
-      |
-      v
-DISK_ONLY persistence
-      |
-      v
-Reusable Spark partitions on disk
-
-This reduces Java heap pressure while still preventing unnecessary recomputation of expensive DataFrames.
-
-The trade-off is that disk access is slower than RAM, but it provides greater stability for large local datasets.
-
-Spark Temporary Storage
-
-Spark also requires temporary disk space for operations such as:
-
-Shuffle
-Sorting
-Spill files
-Persisted blocks
-Intermediate computation
-
-The default temporary filesystem may have limited space.
-
-For this environment, Spark local storage is configured as:
-
-/mnt/d/spark-temp
-
-The SparkSession configuration includes:
-
-.config(
-    "spark.local.dir",
-    "/mnt/d/spark-temp",
-)
-
-Before running large-file tests, create the directory:
-
-mkdir -p /mnt/d/spark-temp
-
-Check its available space:
-
-df -h /mnt/d/spark-temp
-
-The directory should have sufficient free disk space before processing multi-GB files.
-
-Spark Partitions
-
-Input partitions are determined by Spark according to the input data and execution plan.
-
-For example:
-
-Input partitions: 41
-
-means the input is divided into 41 Spark tasks/partitions for processing.
-
-A progress line such as:
-
-[Stage 22:=====================> (16 + 16) / 41]
-
-means approximately:
-
-16 tasks completed
-16 tasks currently running
-41 total tasks
-Shuffle Partitions
-
-The pipeline configures:
-
+```text
+master = local[*]
+spark.driver.memory = 6g
+spark.executor.memory = 6g
 spark.sql.shuffle.partitions = 64
+spark.local.dir = /mnt/d/spark-temp
+```
 
-Shuffle is required when Spark must redistribute records between partitions, such as during:
+### Spark Input Partitions
 
-Deduplication
-Grouping
-Window operations
-Aggregation
+A recorded 209.20 MB execution used `16` input partitions. A successful 5 GB execution used `41` input partitions.
 
-A stage such as:
+### Shuffle Partitions
 
-[Stage 24: ... / 64]
+The pipeline configures `spark.sql.shuffle.partitions = 64`. Shuffle occurs during grouping, Window-based deduplication, sorting by business key, and explicit repartitioning before MongoDB upsert.
 
-indicates a shuffle-related stage using 64 partitions.
+### Repartition Before MongoDB Upsert
 
-The project avoids unnecessary repartitioning because shuffle operations involve additional CPU, serialization, memory, and disk I/O.
+The final validated Spark DataFrame is repartitioned by `order_id` into `8 partitions` before distributed MongoDB upsert. This controls concurrent MongoDB writers.
 
-MongoDB Upsert Parallelism
+### Distributed MongoDB Upsert
 
-The final validated dataset is written to MongoDB using distributed upsert.
-
-Current settings:
-
+```text
 Upsert partitions: 8
 Upsert batch size: 500
+```
 
-The purpose of using 8 write partitions is to provide parallel MongoDB writes without creating excessive concurrent database pressure.
-
-The batch size of 500 reduces network round trips by grouping operations into bulk writes.
-
-Conceptually:
-
+```text
 Validated DataFrame
-       |
-       v
-8 write partitions
-       |
-       v
+        |
+        v
+repartition(8, order_id)
+        |
+        v
+mapPartitions
+        |
+        v
 Bulk batches of 500
-       |
-       v
-MongoDB
-ELT Design
+        |
+        v
+MongoDB orders_validated
+```
 
-The project follows ELT:
+---
 
+## Spark Storage Strategy
+
+Large reusable Spark DataFrames use `StorageLevel.DISK_ONLY`. Spark temporary storage is configured as `/mnt/d/spark-temp`.
+
+```bash
+mkdir -p /mnt/d/spark-temp
+df -h /mnt/d/spark-temp
+```
+
+---
+
+## ELT Raw-First Design
+
+```text
 Extract
    |
    v
@@ -263,471 +328,478 @@ Load Raw
    |
    v
 Transform / Validate
+```
 
-Raw input is loaded before transformation.
+Each Raw document preserves `run_id`, `source_file`, `source_row_number`, `ingested_at`, `engine_used`, and `raw_record`.
 
-Raw documents contain fields such as:
+![MongoDB Raw](reports/screenshots/02-mongodb-raw.png)
 
-run_id
-source_file
-source_row_number
-ingested_at
-engine_used
-raw_record
+---
 
-This preserves traceability between the original input and transformed output.
+## Data Quality Rules
 
-MongoDB Collections
+The project implements more than the required minimum of eight deterministic correction rules.
 
-The database name is:
+| Rule | Purpose |
+|---|---|
+| Arabic digit normalization | Converts known Arabic digits to Latin digits |
+| Thousands separator removal | Normalizes numeric text such as `125,000` |
+| Known Arabic price-word conversion | Converts only explicitly supported known price words |
+| Currency normalization | Standardizes known currency names/symbols |
+| Phone normalization | Removes formatting and normalizes safe phone forms |
+| Email normalization | Repairs clearly repeated symbols when deterministic |
+| Date normalization | Parses supported valid date forms into a standard representation |
+| Status alias normalization | Maps known status aliases to standard values |
+| Trim normalization | Removes leading/trailing whitespace |
+| Numeric normalization | Converts clean numeric values after safe normalization |
+| Item validation | Parses and validates `items_json` |
+| Total recomputation | Recalculates total when components are valid |
 
-midterm_data_pipeline
+The pipeline never guesses ambiguous values. Unsafe records are quarantined.
 
-The project uses three main collections.
+---
 
+## Correction Audit Trail
+
+Every corrected final record preserves `field`, `original_value`, `corrected_value`, and `rule_code`.
+
+![MongoDB Corrected](reports/screenshots/03-mongodb-corrected.png)
+
+---
+
+## Quarantine
+
+Records that cannot be corrected safely are written to `orders_quarantine`. Each quarantine document preserves `run_id`, `order_id` when available, `error_codes`, `error_details`, and `raw_record`.
+
+![MongoDB Quarantine](reports/screenshots/04-mongodb-quarantine.png)
+
+Example codes include `ID_ORDER_MISSING`, `ID_CUSTOMER_MISSING`, `DATE_INVALID_IMPOSSIBLE`, `PHONE_INVALID`, `EMAIL_INVALID`, `PRICE_UNKNOWN`, `JSON_ITEMS_CORRUPTED`, `ITEMS_EMPTY`, and `VALUE_NEGATIVE_AMBIGUOUS`.
+
+---
+
+## Record Classification
+
+The pipeline verifies:
+
+```text
+raw_count = valid_count + corrected_count + quarantine_count
+```
+
+### 500,000-row Spark run
+
+```text
+1,872 + 470,254 + 27,874 = 500,000
+```
+
+### 5 GB successful run
+
+```text
+45,335 + 11,443,532 + 682,812 = 12,171,679
+```
+
+---
+
+## MongoDB Design
+
+Database: `midterm_data_pipeline`
+
+Collections:
+
+```text
 orders_raw
-
-Contains input records together with ingestion metadata.
-
-Raw history may grow across executions because each run receives a unique:
-
-run_id
 orders_validated
-
-Contains final valid and corrected business records.
-
-A unique index is enforced on:
-
-order_id
-
-MongoDB schema validation is enabled.
-
-The collection represents the latest accepted business state rather than a duplicate copy for every run.
-
 orders_quarantine
+```
 
-Contains invalid or ambiguous records that cannot be corrected safely.
+`orders_raw` keeps all input history without a business-key unique index that could reject dirty or duplicate Raw values.
 
-The original raw record and error codes are preserved for investigation.
+`orders_validated` stores final accepted business records and uses the unique index `uq_order_id` on `order_id`.
 
-Data Quality Rules
+![Validated Unique Index](reports/screenshots/05-mongodb-validated-index.png)
 
-The pipeline implements deterministic and safe normalization rules including:
+MongoDB schema validation is configured on `orders_validated`.
 
-Arabic digit normalization
-Thousands separator removal
-Known Arabic price-word conversion
-Currency normalization
-Phone normalization
-Email normalization
-Date normalization
-Status alias normalization
-Trim normalization
-Numeric normalization
-Item validation
-Safe total recomputation
+![Validated Schema Validator](reports/screenshots/06-mongodb-validator.png)
 
-Corrections are only made when a deterministic result can be produced.
+---
 
-Ambiguous values are not guessed.
+## Deduplication
 
-They are sent to quarantine.
+The stable business key is `order_id`. Spark performs deterministic deduplication before the final upsert.
 
-Example Error Codes
+### 500,000-row example
 
-The pipeline reports error codes including:
+```text
+1,872 + 470,254 = 472,126 accepted before dedup
+472,126 - 3,278 = 468,848 validated unique
+```
 
-ID_ORDER_MISSING
-ID_CUSTOMER_MISSING
-DATE_INVALID_IMPOSSIBLE
-PHONE_INVALID
-EMAIL_INVALID
-PRICE_UNKNOWN
-DELIVERY_COST_UNKNOWN
-JSON_ITEMS_CORRUPTED
-ITEMS_EMPTY
-VALUE_NEGATIVE_AMBIGUOUS
+### 5 GB example
 
-A record may contain more than one error code.
+```text
+45,335 + 11,443,532 = 11,488,867 accepted before dedup
+11,488,867 - 80,733 = 11,408,134 validated unique
+```
 
-Therefore, the sum of individual error-code counts does not necessarily equal the number of quarantine records.
+---
 
-Total Recalculation
+## Idempotency and Upsert
 
-When item values and delivery cost are valid, the pipeline can safely recompute:
+```text
+New order_id -> Inserted
+Existing order_id + changed business data -> Updated
+Existing order_id + same business state -> Unchanged
+```
 
-total_amount =
-sum(item totals)
-+ delivery_cost
+### First Run
 
-When a mismatch is corrected, the correction is recorded using the appropriate rule information.
+```text
+Inserted: 8
+Updated: 0
+Unchanged: 0
+```
 
-Correction Audit Trail
+![Idempotency First Run](reports/screenshots/07-idempotency-first-run.png)
 
-Corrected records preserve correction information including:
+### Exact Same Input Again
 
-Field
-Original value
-Corrected value
-Rule code
+```text
+Inserted: 0
+Updated: 0
+Unchanged: 8
+```
 
-This makes transformations auditable instead of silently replacing source values.
+![Idempotency Second Run](reports/screenshots/08-idempotency-second-run.png)
 
-Record Classification
+### Controlled Update of One Existing Record
 
-Every processed raw record must belong to exactly one main classification:
+Target:
 
-Valid
-Corrected
-Quarantine
+```text
+order_id = طلب-100001
+customer_name: علي حسين -> علي حسين UPDATED
+```
 
-The pipeline enforces:
+Result:
 
-raw =
-valid
-+ corrected
-+ quarantine
+```text
+Inserted: 0
+Updated: 1
+Unchanged: 7
+Validated records: 8
+```
 
-If this consistency condition fails, the pipeline raises an error.
+![Upsert Update Proof](reports/screenshots/18-upsert-update-proof.png)
 
-Example:
+---
 
-Raw:        12171679
-Valid:         45335
-Corrected:  11443532
-Quarantine:   682812
+## Metrics
 
-Verification:
+Successful executions are appended to `reports/results.json`. Metrics include run ID, file name/size, engine, Raw/Valid/Corrected/Quarantine counts, elapsed time, throughput, partitions or batch settings, error counts, and Inserted/Updated/Unchanged counts.
 
-45335
-+ 11443532
-+ 682812
-= 12171679
+---
 
-This ensures that input records are not silently lost.
+## Environment Setup
 
-Deduplication
-
-Accepted records may still contain duplicate business keys.
-
-The stable business key is:
-
-order_id
-
-The pipeline performs deterministic deduplication before the final MongoDB upsert.
-
-Metrics include:
-
-duplicate_business_keys
-validated_unique_count
-
-Example:
-
-Valid + Corrected:       11,488,867
-Duplicate business keys:     80,733
-Validated unique:         11,408,134
-Idempotency
-
-The validated collection uses upsert instead of insert-only processing.
-
-For a business record:
-
-New order_id
-    -> Inserted
-
-Existing order_id with changed data
-    -> Updated
-
-Existing order_id with same business state
-    -> Unchanged
-
-Running the same dataset again should therefore not create duplicate validated business records.
-
-The pipeline reports:
-
-Inserted
-Updated
-Unchanged
-
-This provides evidence of idempotent processing.
-
-Metrics
-
-Execution metrics are stored in:
-
-reports/results.json
-
-Each successful run receives a unique:
-
-run_id
-
-Recorded metrics include:
-
-Run ID
-File name
-File size
-Engine used
-Rows read
-Raw rows loaded
-Valid count
-Corrected count
-Quarantine count
-Classified count
-Error counts
-Processing time
-Throughput
-Batch size
-Batch count
-Spark input partitions
-MongoDB upsert partitions
-Inserted records
-Updated records
-Unchanged records
-Duplicate business keys
-Validated unique count
-Recorded timestamp
-Environment Setup
-
-Enter the project directory:
-
+```bash
 cd "/mnt/d/4 Year/Big Data/midterm-data-pipeline"
-
-Activate the Python virtual environment:
-
 source ~/midterm-venv/bin/activate
+pip install -r requirements.txt
+```
 
-Configure MongoDB when MongoDB is running on the Windows host:
+Find current WSL gateway:
 
-export MONGODB_URI="mongodb://172.29.16.1:27017/"
+```bash
+ip route | grep default
+```
 
-Verify:
+Then:
 
-echo $MONGODB_URI
+```bash
+export MONGODB_URI="mongodb://<CURRENT_GATEWAY_IP>:27017/"
+```
 
 Test MongoDB:
 
-python - <<'PY'
+```bash
+python - <<'PY_CHECK_MONGO'
+import os
 from pymongo import MongoClient
-
-client = MongoClient(
-    "mongodb://172.29.16.1:27017/",
-    serverSelectionTimeoutMS=5000
-)
-
+client = MongoClient(os.environ["MONGODB_URI"], serverSelectionTimeoutMS=5000)
 print(client.admin.command("ping"))
 client.close()
-PY
+PY_CHECK_MONGO
+```
 
-Expected:
+Initialize MongoDB:
 
-{'ok': 1.0}
-Initialize MongoDB
-
-Initialize collections, validation rules, and indexes using:
-
+```bash
 python -m src.mongo_setup
+```
 
-The validated collection maintains the unique index:
+Prepare Spark storage:
 
-uq_order_id
-
-on:
-
-order_id
-Prepare Spark Local Storage
-
-Before large-file execution:
-
+```bash
 mkdir -p /mnt/d/spark-temp
-
-Verify capacity:
-
 df -h /mnt/d/spark-temp
-Run the Pipeline
-Small file
-python -m src.main \
-  --input "data/orders_test_10.csv"
+```
 
-Expected engine:
+---
 
-python_batch
-Medium batch test
-python -m src.main \
-  --input "data/orders_batch_test.csv"
+## Run Commands
 
-Expected engine:
+```bash
+python -m src.main --input "data/orders_test_10.csv"
+python -m src.main --input "data/orders_batch_test.csv"
+python -m src.main --input "data/orders_spark_test.csv"
+python -m src.main --input "data/orders_large_1gb.csv"
+python -m src.main --input "data/orders_large_5gb.csv"
+```
 
-python_batch
+---
 
-because the file is below 200 MB.
+## Generate Test Samples
 
-Spark test
-python -m src.main \
-  --input "data/orders_spark_test.csv"
+```bash
+python -m src.create_small_sample --input "/path/to/orders_huge_mixed_quality.csv" --output "data/orders_test.csv" --rows 10000
+python -m src.create_small_sample --input "/path/to/orders_huge_mixed_quality.csv" --output "data/orders_large_1gb.csv" --size-gb 1
+python -m src.create_small_sample --input "/path/to/orders_huge_mixed_quality.csv" --output "data/orders_large_5gb.csv" --size-gb 5
+```
 
-Expected engine:
+---
 
-pyspark
+## Automated Tests
 
-when the file exceeds 200 MB.
+The repository contains automated tests for the core required behaviors:
 
-Multi-GB Spark test
-python -m src.main \
-  --input "data/orders_large_5gb.csv"
+```text
+tests/test_quality_rules.py
+tests/test_consistency.py
+tests/test_file_router.py
+tests/test_idempotency_logic.py
+```
 
-Expected engine:
+Run:
 
-pyspark
+```bash
+python -m unittest discover -s tests -v
+```
 
-The pipeline can process any test file with the expected CSV structure; the file name itself is not part of the engine-selection logic.
+Latest verified result:
 
-Generate Test Samples
+```text
+Ran 21 tests in 0.009s
 
-A smaller or larger sample can be generated from the original dataset.
+OK
+```
 
-By row count
-python -m src.create_small_sample \
-  --input "/path/to/orders_huge_mixed_quality.csv" \
-  --output "data/orders_test.csv" \
-  --rows 10000
-By target size
+The 21 passing tests cover:
 
-Example 1 GB:
+- Router boundary behavior, including 5 MB, 200 MB and 201 MB cases;
+- Raw/classified consistency;
+- same-record idempotency;
+- changed-record update detection;
+- Arabic digit normalization;
+- thousands separator normalization;
+- price-word normalization;
+- currency normalization;
+- date normalization;
+- phone normalization;
+- email normalization;
+- status aliases;
+- `items_json` validation;
+- negative/ambiguous item handling;
+- total recomputation.
 
-python -m src.create_small_sample \
-  --input "/path/to/orders_huge_mixed_quality.csv" \
-  --output "data/orders_large_1gb.csv" \
-  --size-gb 1
 
-Example 5 GB:
+## Recorded Results
 
-python -m src.create_small_sample \
-  --input "/path/to/orders_huge_mixed_quality.csv" \
-  --output "data/orders_large_5gb.csv" \
-  --size-gb 5
+### Python Batch — 12,000 Rows
 
-The sample generator streams the source CSV.
-
-Tested Results
-Python Batch Test
-
-A 10-row sample produced:
-
-Raw: 10
-Valid: 0
-Corrected: 8
-Quarantine: 2
-Consistency check: 10 = 10
-
-Running the same final business state again produced unchanged records rather than duplicate validated records.
-
-12,000-Row Python Batch Test
-
-A 5.01 MB file containing 12,000 rows used:
-
+```text
+File size: 5.01 MB
+Rows: 12,000
 Engine: python_batch
-Batch size: 5000
+Batch size: 5,000
 Batch count: 3
+```
 
-This verifies configurable batch processing.
+### PySpark — 500,000 Rows
 
-500,000-Row Spark Test
-
-A sample larger than the 200 MB threshold used PySpark.
-
-Example recorded metrics include:
-
-Raw: 500000
+```text
+File size: 209.20 MB
+Raw: 500,000
+Valid: 1,872
+Corrected: 470,254
+Quarantine: 27,874
+Duplicate business rows removed: 3,278
+Validated unique: 468,848
+Inserted: 468,848
+Updated: 0
+Unchanged: 0
 Input partitions: 16
-Engine: pyspark
+Upsert partitions: 8
+```
 
-Repeated execution demonstrated idempotent behavior through inserted, updated, and unchanged counts.
+![Spark Final Result](reports/screenshots/17-spark-final-result.png)
 
-1 GB Spark Test
+### PySpark — 1 GB Successful Benchmark
 
-A 1 GB sample was successfully processed using PySpark.
-
-Recorded metrics:
-
-File size: 1024 MB
+```text
+File size: 1,024 MB
 Rows: 2,439,999
-Engine: pyspark
-
 Valid: 8,970
 Corrected: 2,294,249
 Quarantine: 136,780
-
-Duplicate business keys: 16,079
+Duplicate business rows removed: 16,079
 Validated unique: 2,287,140
-
 Elapsed: 178.42 seconds
 Throughput: 13,675.31 rows/second
-
 Input partitions: 16
 Upsert partitions: 8
+```
 
-This verifies the large-file Spark route on a multi-million-row dataset.
+### PySpark — 5 GB Successful Large-Scale Benchmark
 
-5 GB Stress Test
+Run ID:
 
-A 5 GB sample contains approximately:
+```text
+aed8bab5-0dc7-410c-9a35-fe8b5e08cc28
+```
 
-12.17 million rows
+```text
+File: orders_large_5gb.csv
+File size: 5,120 MB
+Rows read: 12,171,679
+Engine: pyspark
+Raw: 12,171,679
+Valid: 45,335
+Corrected: 11,443,532
+Quarantine: 682,812
+Duplicate business rows removed: 80,733
+Validated unique: 11,408,134
+Elapsed time: 1,588.8493 seconds (~26m 29s)
+Throughput: 7,660.69 rows/second
+Input partitions: 41
+Upsert partitions: 8
+```
 
-Testing this dataset exposed two local-resource limitations that were addressed:
+Error counts:
 
-Java heap exhaustion
-    -> DISK_ONLY persistence
+```text
+JSON_ITEMS_CORRUPTED:       170,398
+ID_CUSTOMER_MISSING:        170,595
+DATE_INVALID_IMPOSSIBLE:     85,536
+ID_ORDER_MISSING:            85,333
+PRICE_UNKNOWN:               85,002
+VALUE_NEGATIVE_AMBIGUOUS:    85,289
+EMAIL_INVALID:              170,146
+PHONE_INVALID:               85,519
+```
 
-Default temporary storage exhaustion
-    -> spark.local.dir redirected to /mnt/d/spark-temp
+---
 
-Only successful completed runs should be recorded as final benchmark results in reports/results.json.
+## Execution Evidence
 
-Tests
+### Spark Router
 
-Run automated tests with:
+![Spark Router](reports/screenshots/09-spark-router.png)
 
-python -m unittest discover -s tests -v
+### Spark Jobs
 
-The test suite covers areas including:
+![Spark Jobs](reports/screenshots/10-spark-ui-jobs.png)
 
-Data-quality rules
-Arabic digit normalization
-Currency normalization
-Date handling
-Email handling
-Phone handling
-Item validation
-Negative values
-Price-word normalization
-Total recomputation
-Status aliases
-Thousands separators
-Consistency
-Idempotency logic
-Requirements
+### Spark SQL / DataFrame Executions
 
-The project requires:
+![Spark SQL](reports/screenshots/11-spark-ui-sql-executions.png)
 
-Python
-PySpark
-Java
-MongoDB
-MongoDB Spark Connector
-PyMongo
+### Spark Executors
 
-Install Python dependencies using:
+![Spark Executors](reports/screenshots/12-spark-ui-executors.png)
 
-pip install -r requirements.txt
-Repository Data Policy
+Recorded UI values include:
 
-Large CSV datasets are intentionally excluded from Git.
+```text
+Cores: 16
+Active Tasks: 8
+Complete Tasks: 391
+Total Tasks: 399
+Input: 884.5 MiB
+Shuffle Read: 141.1 MiB
+Shuffle Write: 248.4 MiB
+```
 
-The repository stores:
+### Spark Environment
 
-Source code
-Configuration
-Automated tests
-Documentation
-Result reports
+![Spark Environment](reports/screenshots/13-spark-ui-environment.png)
+
+### Spark Storage
+
+![Spark Storage](reports/screenshots/14-spark-ui-storage.png)
+
+### Spark Stages
+
+![Spark Stages](reports/screenshots/15-spark-ui-stages.png)
+
+The UI shows 8-task, 16-task and 64-task stages and real Shuffle Read/Write activity.
+
+### Completed Spark Stages
+
+![Completed Spark Stages](reports/screenshots/16-spark-ui-completed-stages.png)
+
+---
+
+## Batch vs PySpark Comparison
+
+| Metric | Python Batch | PySpark Live Test | PySpark Large Benchmark |
+|---|---:|---:|---:|
+| Input file | `orders_batch_test.csv` | `orders_spark_test.csv` | `orders_large_5gb.csv` |
+| File size | 5.01 MB | 209.20 MB | 5,120 MB |
+| Rows | 12,000 | 500,000 | 12,171,679 |
+| Selected engine | `python_batch` | `pyspark` | `pyspark` |
+| Batch size | 5,000 | N/A | N/A |
+| Batch count | 3 | N/A | N/A |
+| Raw-load throughput | 29,412.80 rows/s | N/A | N/A |
+| Overall pipeline throughput | 1,014.92 rows/s | recorded in run metrics | 7,660.69 rows/s |
+| Input partitions | N/A | 16 | 41 |
+| Upsert partitions | N/A | 8 | 8 |
+| Execution model | Streaming batches | Spark DataFrame partitions | Spark DataFrame partitions |
+| Raw-first ELT | Yes | Yes | Yes |
+| Idempotent final upsert | Yes | Yes | Yes |
+
+---
+
+## Data Integrity Policy
+
+The original source dataset is not manually modified to improve results. Controlled tests, including the one-record update test, are generated programmatically. No invalid source rows are removed before Raw loading.
+
+---
+
+## Repository Data Policy
+
+Large generated CSV files are intentionally not required to be stored in Git. The repository contains source code, configuration, tests, documentation, reports and screenshots. Large test samples can be regenerated with `src/create_small_sample.py`.
+
+---
+
+## Practical Demo Sequence
+
+```text
+1. Run orders_test_10.csv -> python_batch
+2. Show orders_raw before cleaning
+3. Show corrected audit trail
+4. Show quarantine reasons
+5. Show unique index and validator
+6. Rerun same 10-row input -> Unchanged 8
+7. Run controlled update -> Updated 1, validated remains 8
+8. Run orders_spark_test.csv -> pyspark
+9. Show Spark Jobs / Stages / Tasks / Partitions / Shuffle
+10. Show final Spark result
+11. Show reports/results.json
+12. Explain successful 5 GB run
+```
+
+---
+
+## Summary
+
+The project demonstrates automatic routing, Python streaming batch loading with per-batch throughput and explicit failure reporting, Spark large-file processing, Raw-first ELT, deterministic quality correction, audit trail, quarantine, stable business key, unique index, MongoDB schema validation, deterministic deduplication, idempotent upsert, execution metrics, Spark UI evidence, 21 passing automated tests, and successful 500K, 1 GB and 5 GB runs.
