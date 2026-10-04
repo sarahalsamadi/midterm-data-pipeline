@@ -48,8 +48,9 @@ The pipeline automatically selects the processing engine according to the input 
 32. [Phase 2 Environment and Dependencies](#phase-2-environment-and-dependencies)
 33. [Phase 2 Quick Evaluation Sequence](#phase-2-quick-evaluation-sequence)
 34. [Testing with a New Dataset](#testing-with-a-new-dataset)
-35. [Phase 2 Validation](#phase-2-validation)
-36. [Phase 2 Evidence Map](#phase-2-evidence-map)
+35. [Expected Input CSV Schema](#expected-input-csv-schema)
+36. [Phase 2 Validation](#phase-2-validation)
+37. [Phase 2 Evidence Map](#phase-2-evidence-map)
 
 ---
 
@@ -1319,6 +1320,125 @@ After ingestion, the evaluator can:
 Queries, aggregations, materialized views, and scheduled jobs operate on the data currently stored in MongoDB.
 
 The filenames, record counts, query results, aggregation values, and materialized-view results shown elsewhere in this README are execution evidence from development and are **not hardcoded runtime results**.
+
+---
+
+
+## Expected Input CSV Schema
+
+The pipeline can be tested with new CSV datasets without changing the application code. The filename, number of rows, order IDs, and business values are not hardcoded. A new dataset must, however, use the business fields expected by the ingestion and ELT pipeline.
+
+MongoDB is intentionally schema-flexible at the Raw layer. `src/batch_loader.py` reads each CSV row with `csv.DictReader` and preserves it inside `orders_raw.raw_record` together with ingestion metadata. The ELT stage then validates and normalizes the expected fields into the canonical document stored in `orders_validated`. Records with non-recoverable quality errors are written to `orders_quarantine`.
+
+### Expected CSV Columns
+
+| CSV Column | Purpose | Processing |
+|---|---|---|
+| `order_id` | Unique business identifier for the order | Trimmed and checked for missing values; used as the idempotent business key |
+| `customer_id` | Customer identifier | Trimmed and checked for missing values |
+| `order_date` | Order date | Parsed and normalized; impossible/unsupported dates are quarantined |
+| `status` | Order status | Normalized using the configured status aliases |
+| `customer_name` | Customer name | Preserved as a business attribute |
+| `customer_phone` | Customer phone number | Normalized when supplied; an invalid supplied value is quarantined |
+| `customer_email` | Customer email address | Normalized when supplied; an invalid supplied value is quarantined |
+| `city` | Order/customer city | Preserved and used by analytical queries and reports |
+| `district` | District | Preserved as a business attribute |
+| `delivery_type` | Delivery type | Preserved as a business attribute |
+| `delivery_cost` | Delivery charge | Converted to a numeric value and used in total recomputation |
+| `payment_method` | Payment method | Preserved as a business attribute |
+| `payment_status` | Payment status | Normalized and used by Phase 2 queries/indexes |
+| `payment_amount` | Amount paid | Converted to a numeric value |
+| `currency` | Transaction currency | Normalized to the canonical currency representation |
+| `total_amount` | Total order amount | Converted to numeric form and checked against the recomputed total |
+| `items_json` | JSON representation of order line items | Parsed and validated, then stored as the canonical `items` array |
+
+### `items_json` Format
+
+`items_json` represents a JSON array of order items. Each item is validated by the quality layer. A compatible structure is:
+
+```json
+[
+  {
+    "sku": "SKU-1001",
+    "qty": 2,
+    "unit_price": 1500,
+    "total": 3000
+  }
+]
+```
+
+The quality rules require interpretable non-negative quantity and price values. If an item-level `total` is supplied, it is normalized and validated; otherwise the pipeline can use `qty * unit_price` when recomputing the order total.
+
+### Raw Schema vs Canonical Schema
+
+The source row is not forced directly into the final MongoDB structure. The project deliberately separates source preservation from business validation:
+
+```text
+New compatible CSV
+        |
+        v
+   orders_raw
+(original row preserved)
+        |
+        v
+Validation / Normalization / Correction
+        |
+        +-------------------+
+        |                   |
+        v                   v
+orders_validated      orders_quarantine
+(canonical data)       (quality errors)
+```
+
+A successful accepted record is normalized into the following business fields:
+
+```text
+order_id
+order_date
+status
+customer_id
+customer_name
+customer_phone
+customer_email
+city
+district
+delivery_type
+delivery_cost
+payment_method
+payment_status
+payment_amount
+currency
+total_amount
+items
+quality_status
+corrections
+```
+
+The Raw document additionally preserves ingestion metadata such as `run_id`, `source_file`, `source_row_number`, `ingested_at`, and `engine_used`.
+
+### Data Quality Outcomes
+
+Every Raw record ends in one of the existing project classifications:
+
+- **Valid** — the record satisfies the quality rules without requiring correction.
+- **Corrected** — deterministic, recoverable issues are normalized/corrected and the record is accepted into `orders_validated`.
+- **Quarantine** — the record contains a non-recoverable or ambiguous quality problem and is preserved in `orders_quarantine` with its error codes and original `raw_record`.
+
+Examples of quarantine conditions already implemented by the project include missing `order_id`, missing `customer_id`, impossible dates, invalid supplied phone/email values, corrupted or empty item data, unknown required numeric values, and ambiguous negative item values.
+
+When valid item values and `delivery_cost` are available, the pipeline recomputes the order total. If the supplied `total_amount` differs from the recomputed value by more than the configured tolerance, the deterministic correction is recorded in the correction audit trail.
+
+### Evaluator Dataset Compatibility
+
+A different evaluator dataset does **not** need to use the development filenames, fixed order IDs, fixed row counts, or the recorded values shown in this README. It only needs to use a CSV structure compatible with the fields above. For example:
+
+```bash
+python -m src.main --input "/path/to/evaluator_orders.csv"
+```
+
+The processing engine is still selected from the actual file size (`<= 200 MB` uses Python Batch and `> 200 MB` uses PySpark), and all counts and analytical results are computed from the supplied data.
+
+This Raw-first design is intentional: source data is preserved before transformation for auditability, debugging, traceability, and reprocessing, while the ELT and MongoDB validation layers enforce the canonical business structure.
 
 ---
 
