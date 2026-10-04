@@ -47,8 +47,9 @@ The pipeline automatically selects the processing engine according to the input 
 31. [Unified FastAPI](#unified-fastapi)
 32. [Phase 2 Environment and Dependencies](#phase-2-environment-and-dependencies)
 33. [Phase 2 Quick Evaluation Sequence](#phase-2-quick-evaluation-sequence)
-34. [Phase 2 Validation](#phase-2-validation)
-35. [Phase 2 Evidence Map](#phase-2-evidence-map)
+34. [Testing with a New Dataset](#testing-with-a-new-dataset)
+35. [Phase 2 Validation](#phase-2-validation)
+36. [Phase 2 Evidence Map](#phase-2-evidence-map)
 
 ---
 
@@ -1187,6 +1188,137 @@ For automatic scheduled execution, open another terminal with the same `MONGODB_
 ```bash
 python -m src.scheduler
 ```
+
+---
+
+## Testing with a New Dataset
+
+The evaluator can test the project using a new CSV dataset without modifying the source code or relying on the sample filenames, record counts, or results used during development.
+
+### 1. Configure the Environment
+
+Activate the Python environment and install the required dependencies:
+
+```bash
+source ~/midterm-venv/bin/activate
+pip install -r requirements.txt
+```
+
+Configure the MongoDB connection:
+
+```bash
+export MONGODB_URI="mongodb://<MONGODB_HOST>:27017/"
+```
+
+Initialize and verify the MongoDB collections and required configuration:
+
+```bash
+python -m src.mongo_setup
+```
+
+### 2. Ingest Any New CSV Dataset
+
+The evaluator can provide any compatible CSV file and run:
+
+```bash
+python -m src.main --input "/path/to/new_orders.csv"
+```
+
+The input filename, file size, record count, and processing results are not hardcoded.
+
+The existing file router automatically selects the processing engine according to the actual input file size:
+
+```text
+File size <= 200 MB -> Python Batch
+File size > 200 MB  -> PySpark
+```
+
+Regardless of the selected engine, the new dataset passes through the same project pipeline:
+
+```text
+New CSV Dataset
+       |
+       v
+   File Router
+    /       \
+   v         v
+Python     PySpark
+Batch
+   \         /
+    +---+---+
+        |
+        v
+    orders_raw
+        |
+        v
+ Data Quality Rules
+        |
+   +----+----+
+   |         |
+   v         v
+Accepted  Quarantine
+   |
+   v
+Deduplication
+   |
+   v
+Idempotent Upsert
+   |
+   v
+orders_validated
+```
+
+Every source record is loaded to the Raw layer before quality processing. Invalid or ambiguous records are quarantined rather than silently discarded.
+
+### 3. Start the Unified Phase 2 API
+
+Run FastAPI:
+
+```bash
+python -m uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+Open the Swagger interface:
+
+```text
+http://localhost:8000/docs
+```
+
+Swagger provides an interactive interface for testing the Phase 2 functionality.
+
+### 4. Test the Required API Operations
+
+The evaluator can execute the required operations directly from Swagger:
+
+```text
+GET  /health
+POST /ingest
+POST /indexes
+GET  /queries
+GET  /queries/{name}
+GET  /aggregations
+GET  /aggregations/{name}
+POST /refresh-mv
+GET  /jobs
+POST /jobs/{name}/run
+```
+
+`POST /ingest` reuses the existing `run_pipeline()` entry point from `src/main.py`. It therefore uses the same file router and Python Batch/PySpark ingestion pipeline implemented in Phase 1 instead of introducing a separate ingestion path.
+
+### 5. Validate Phase 2 Using the New Data
+
+After ingestion, the evaluator can:
+
+1. Create the required MongoDB indexes using `POST /indexes`.
+2. Execute practical queries through `GET /queries/{name}`.
+3. Execute aggregation reports through `GET /aggregations/{name}`.
+4. Refresh the materialized views using `POST /refresh-mv`.
+5. Inspect the available scheduled jobs using `GET /jobs`.
+6. Run either scheduled job manually using `POST /jobs/{name}/run`.
+
+Queries, aggregations, materialized views, and scheduled jobs operate on the data currently stored in MongoDB.
+
+The filenames, record counts, query results, aggregation values, and materialized-view results shown elsewhere in this README are execution evidence from development and are **not hardcoded runtime results**.
 
 ---
 
