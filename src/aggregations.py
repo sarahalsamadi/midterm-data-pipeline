@@ -86,13 +86,19 @@ def top_products(limit=10):
             },
             {
                 "$group": {
-                    "_id": {
-                        "sku": "$items.sku",
-                        "name": "$items.name",
-                    },
-                    "quantity_sold": {"$sum": "$items.qty"},
-                    "revenue": {"$sum": "$items.total"},
-                    "order_occurrences": {"$sum": 1},
+                    "_id": "$items.sku",
+                    "product_name": {
+            "$first": "$items.name",
+        },
+        "quantity_sold": {
+            "$sum": "$items.qty",
+        },
+        "revenue": {
+            "$sum": "$items.total",
+        },
+        "order_occurrences": {
+            "$sum": 1,
+        },
                 }
             },
             {

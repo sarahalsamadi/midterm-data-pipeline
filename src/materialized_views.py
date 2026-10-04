@@ -153,24 +153,33 @@ def _product_pipeline(match_stage=None):
             },
             {
                 "$group": {
-                    "_id": {
-                        "sku": "$items.sku",
-                        "name": "$items.name",
+                    "_id": "$items.sku",
+                    "product_name": {
+                        "$first": "$items.name",
                     },
-                    "quantity_sold": {"$sum": "$items.qty"},
-                    "revenue": {"$sum": "$items.total"},
-                    "order_occurrences": {"$sum": 1},
+                    "quantity_sold": {
+                        "$sum": "$items.qty",
+                    },
+                    "revenue": {
+                        "$sum": "$items.total",
+                    },
+                    "order_occurrences": {
+                        "$sum": 1,
+                    },
                 }
             },
             {
                 "$project": {
                     "_id": 0,
-                    "sku": "$_id.sku",
-                    "product_name": "$_id.name",
+                    "sku": "$_id",
+                    "product_name": 1,
                     "quantity_sold": {
-                        "$round": ["$quantity_sold", 2]
+                        "$round": [
+                            "$quantity_sold",
+                            2,
+                        ]
                     },
-                    "revenue": {"$round": ["$revenue", 2]},
+                    
                     "order_occurrences": 1,
                 }
             },
