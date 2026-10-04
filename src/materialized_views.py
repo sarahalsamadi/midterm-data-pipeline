@@ -140,15 +140,28 @@ def _product_pipeline(match_stage=None):
     pipeline = []
 
     if match_stage:
-        pipeline.append({"$match": match_stage})
+        pipeline.append(
+            {
+                "$match": match_stage
+            }
+        )
 
     pipeline.extend(
         [
-            {"$unwind": "$items"},
+            {
+                "$unwind": "$items"
+            },
             {
                 "$match": {
-                    "items.sku": {"$nin": [None, ""]},
-                    "items.total": {"$type": "number"},
+                    "items.sku": {
+                        "$nin": [
+                            None,
+                            "",
+                        ]
+                    },
+                    "items.total": {
+                        "$type": "number"
+                    },
                 }
             },
             {
@@ -179,7 +192,12 @@ def _product_pipeline(match_stage=None):
                             2,
                         ]
                     },
-                    
+                    "revenue": {
+                        "$round": [
+                            "$revenue",
+                            2,
+                        ]
+                    },
                     "order_occurrences": 1,
                 }
             },

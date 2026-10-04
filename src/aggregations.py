@@ -80,25 +80,32 @@ def top_products(limit=10):
             },
             {
                 "$match": {
-                    "items.sku": {"$nin": [None, ""]},
-                    "items.total": {"$type": "number"},
+                    "items.sku": {
+                        "$nin": [
+                            None,
+                            "",
+                        ]
+                    },
+                    "items.total": {
+                        "$type": "number"
+                    },
                 }
             },
             {
                 "$group": {
                     "_id": "$items.sku",
                     "product_name": {
-            "$first": "$items.name",
-        },
-        "quantity_sold": {
-            "$sum": "$items.qty",
-        },
-        "revenue": {
-            "$sum": "$items.total",
-        },
-        "order_occurrences": {
-            "$sum": 1,
-        },
+                        "$first": "$items.name",
+                    },
+                    "quantity_sold": {
+                        "$sum": "$items.qty",
+                    },
+                    "revenue": {
+                        "$sum": "$items.total",
+                    },
+                    "order_occurrences": {
+                        "$sum": 1,
+                    },
                 }
             },
             {
@@ -112,20 +119,30 @@ def top_products(limit=10):
             {
                 "$project": {
                     "_id": 0,
-                    "sku": "$_id.sku",
-                    "product_name": "$_id.name",
+                    "sku": "$_id",
+                    "product_name": 1,
                     "quantity_sold": {
-                        "$round": ["$quantity_sold", 2]
+                        "$round": [
+                            "$quantity_sold",
+                            2,
+                        ]
                     },
                     "revenue": {
-                        "$round": ["$revenue", 2]
+                        "$round": [
+                            "$revenue",
+                            2,
+                        ]
                     },
                     "order_occurrences": 1,
                 }
             },
         ]
 
-        return list(collection.aggregate(pipeline))
+        return list(
+            collection.aggregate(
+                pipeline
+            )
+        )
 
     finally:
         client.close()
