@@ -83,6 +83,23 @@ def business_documents_equal(
         == incoming_business
     )
 
+def extract_mv_keys(document):
+    order_date = document.get("order_date")
+    date_value = None
+
+    if isinstance(order_date, str) and len(order_date) >= 10:
+        date_value = order_date[:10]
+
+    skus = sorted({
+        item.get("sku")
+        for item in document.get("items", [])
+        if isinstance(item, dict) and item.get("sku")
+    })
+
+    return {
+        "date": date_value,
+        "skus": skus,
+    }
 
 def execute_bulk_with_retry(
     collection,
@@ -208,7 +225,11 @@ def process_batch(
             continue
 
         updated += 1
-
+        record[
+            "previous_mv_keys"
+        ] = extract_mv_keys(
+            existing
+        )
         operations.append(
             UpdateOne(
                 {

@@ -1,6 +1,8 @@
 # Midterm Data Pipeline
 
-Hybrid order-data processing pipeline using **Python Batch**, **Apache Spark**, **MongoDB**, **ELT**, **Data Quality**, **Quarantine**, **Idempotent Upsert**, deterministic deduplication, and execution metrics.
+End-to-end Big Data order-processing platform using **Python Batch**, **Apache Spark**, **MongoDB**, **ELT**, **Data Quality**, **Quarantine**, **Idempotent Upsert**, deterministic deduplication, **MongoDB Queries & Indexes**, **Aggregation Pipelines**, **Incremental Materialized Views**, **Scheduled Jobs**, and a unified **FastAPI REST API**.
+
+This repository contains both phases of the project. **Phase 1** implements the scalable ingestion and data-quality pipeline, while **Phase 2** extends the same architecture with operational queries, indexing and performance analysis, analytical reports, incremental materialized views, scheduled processing, and API access.
 
 The project is designed for mixed-quality e-commerce order data and follows one core rule:
 
@@ -35,6 +37,18 @@ The pipeline automatically selects the processing engine according to the input 
 21. [Batch vs PySpark Comparison](#batch-vs-pyspark-comparison)
 22. [Data Integrity Policy](#data-integrity-policy)
 23. [Repository Data Policy](#repository-data-policy)
+24. [Phase 2 — Analytics and API Layer](#phase-2--analytics-and-api-layer)
+25. [Phase 2 Practical Queries](#phase-2-practical-queries)
+26. [Phase 2 Indexes](#phase-2-indexes)
+27. [Explain Analysis — Before and After Indexes](#explain-analysis--before-and-after-indexes)
+28. [Aggregation Reports](#aggregation-reports)
+29. [Materialized Views](#materialized-views)
+30. [Scheduled Jobs](#scheduled-jobs)
+31. [Unified FastAPI](#unified-fastapi)
+32. [Phase 2 Environment and Dependencies](#phase-2-environment-and-dependencies)
+33. [Phase 2 Quick Evaluation Sequence](#phase-2-quick-evaluation-sequence)
+34. [Phase 2 Validation](#phase-2-validation)
+35. [Phase 2 Evidence Map](#phase-2-evidence-map)
 
 ---
 
@@ -125,6 +139,7 @@ midterm-data-pipeline/
 |
 |-- README.md
 |-- requirements.txt
+|-- .env.example
 |-- .gitignore
 |
 |-- config/
@@ -145,7 +160,14 @@ midterm-data-pipeline/
 |   |-- quality_rules.py
 |   |-- elt_pipeline.py
 |   |-- mongo_setup.py
-|   `-- metrics.py
+|   |-- metrics.py
+|   |-- queries.py
+|   |-- indexes.py
+|   |-- aggregations.py
+|   |-- materialized_views.py
+|   |-- jobs.py
+|   |-- scheduler.py
+|   `-- api.py
 |
 |-- tests/
 |   |-- test_consistency.py
@@ -156,6 +178,7 @@ midterm-data-pipeline/
 |-- reports/
 |   |-- results.json
 |   |-- results.md
+|   |-- explain_results.json
 |   `-- screenshots/
 |
 `-- docs/
@@ -177,6 +200,13 @@ midterm-data-pipeline/
 | `src/elt_pipeline.py` | Python Raw to quality classification to validated/quarantine |
 | `src/mongo_setup.py` | MongoDB collections, validator, indexes and connection checks |
 | `src/metrics.py` | Appends successful run metrics to `reports/results.json` |
+| `src/queries.py` | Five practical MongoDB queries |
+| `src/indexes.py` | Phase 2 indexes and Explain analysis |
+| `src/aggregations.py` | Five analytical aggregation reports |
+| `src/materialized_views.py` | Incremental materialized-view refresh |
+| `src/jobs.py` | Job definitions, execution, and persistent logging |
+| `src/scheduler.py` | Automatic scheduled execution |
+| `src/api.py` | Unified FastAPI interface |
 
 ---
 
@@ -800,6 +830,423 @@ Large generated CSV files are intentionally not required to be stored in Git. Th
 
 ---
 
+# Phase 2 — Analytics and API Layer
+
+Phase 2 extends the existing Midterm Data Pipeline in the **same repository**. The original ingestion architecture remains unchanged, while the project is extended with practical MongoDB queries, indexes and execution-plan analysis, aggregation reports, incremental materialized views, scheduled jobs, and a unified FastAPI interface.
+
+The FastAPI `/ingest` endpoint reuses the existing `run_pipeline()` function from `src/main.py`. Therefore, API ingestion follows the same file-size router, Python Batch/PySpark processing paths, Raw-first ELT, data-quality rules, quarantine, deduplication, and idempotent upsert logic used by the original project.
+
+### Phase 2 Components
+
+| Component | Implementation |
+|---|---|
+| Practical Queries | `src/queries.py` |
+| Indexes & Explain Analysis | `src/indexes.py` |
+| Aggregation Reports | `src/aggregations.py` |
+| Materialized Views | `src/materialized_views.py` |
+| Scheduled Jobs | `src/jobs.py` |
+| Automatic Scheduler | `src/scheduler.py` |
+| Unified REST API | `src/api.py` |
+| Existing Ingestion Entry Point | `src/main.py` |
+| Explain Results | `reports/explain_results.json` |
+| Environment Example | `.env.example` |
+
+---
+
+## Phase 2 Practical Queries
+
+Five practical MongoDB queries are implemented in `src/queries.py` and operate on actual documents from `orders_validated`.
+
+| Query | Purpose |
+|---|---|
+| `orders_by_city` | Retrieve orders for a selected city |
+| `orders_by_status` | Retrieve orders with a selected status |
+| `customer_orders` | Retrieve the order history of a customer |
+| `orders_by_date_range` | Retrieve orders within a date range |
+| `high_value_paid_orders` | Retrieve paid orders above a configurable value |
+
+The queries accept runtime parameters and are also exposed through the API:
+
+```text
+GET /queries
+GET /queries/{name}
+```
+
+Example:
+
+```bash
+curl -sG \
+  --data-urlencode "city=إب" \
+  --data-urlencode "limit=3" \
+  http://localhost:8000/queries/orders_by_city
+```
+
+---
+
+## Phase 2 Indexes
+
+Three additional indexes are implemented for the Phase 2 query workload:
+
+| Index | Definition | Purpose |
+|---|---|---|
+| `idx_city` | `{city: 1}` | Accelerates filtering by city |
+| `idx_customer_id` | `{customer_id: 1}` | Accelerates customer-order lookup |
+| `idx_payment_status_total` | `{payment_status: 1, total_amount: -1}` | Compound index for paid high-value orders |
+
+The original unique business-key index remains in place:
+
+```text
+uq_order_id -> {order_id: 1}, unique
+```
+
+The compound index places `payment_status` first because it is used as an equality predicate and `total_amount` second to support the amount range and descending access pattern.
+
+### Index Creation Evidence
+
+![Phase 2 Indexes](reports/screenshots/22-phase2-indexes-created.png)
+
+---
+
+## Explain Analysis — Before and After Indexes
+
+MongoDB `explain("executionStats")` was recorded for three representative queries before and after creating the Phase 2 indexes. The complete machine-readable results are stored in `reports/explain_results.json`.
+
+| Query | Before Plan | Docs Examined Before | Time Before | After Plan | Docs Examined After | Keys Examined After | Time After |
+|---|---|---:|---:|---|---:|---:|---:|
+| `orders_by_city` | `COLLSCAN` | 10,990 | 6 ms | `IXSCAN` + `FETCH` | 1,154 | 1,154 | 2 ms |
+| `customer_orders` | `COLLSCAN` | 10,990 | 8 ms | `IXSCAN` + `FETCH` | 1 | 1 | 1 ms |
+| `high_value_paid_orders` | `COLLSCAN` + `SORT` | 10,990 | 13 ms | `IXSCAN` + `FETCH` | 2,172 | 2,172 | 4 ms |
+
+The results show that the indexes substantially reduce unnecessary document examination. `customer_orders`, for example, drops from scanning 10,990 documents to examining one matching document. The compound index also replaces the previous collection-scan-plus-sort path for high-value paid orders.
+
+### Before Indexes
+
+![City Before Index](reports/screenshots/19-explain-city-before-index.png)
+
+![Customer Before Index](reports/screenshots/20-explain-customer-value-before-index.png)
+
+![High Value Before Index](reports/screenshots/21-explain-high-value-before-index.png)
+
+### After Indexes
+
+![City After Index](reports/screenshots/23-explain-city-after-index.jpg)
+
+![Customer After Index](reports/screenshots/24-explain-customer-after-index.jpg)
+
+![High Value After Index](reports/screenshots/25-explain-high-value-after-index.png)
+
+---
+
+## Aggregation Reports
+
+Five independently executable MongoDB aggregation reports are implemented in `src/aggregations.py`.
+
+| Aggregation | Purpose |
+|---|---|
+| `sales_by_city` | Analyze order count and sales by city |
+| `top_products` | Analyze product sales and quantities |
+| `top_customers` | Identify highest-value customers |
+| `sales_by_period` | Analyze sales activity over time |
+| `orders_by_status` | Analyze the distribution of order statuses |
+
+They are exposed through:
+
+```text
+GET /aggregations
+GET /aggregations/{name}
+```
+
+Example:
+
+```bash
+curl -s "http://localhost:8000/aggregations/sales_by_city?limit=5" | python -m json.tool
+```
+
+### Aggregation Evidence
+
+![Sales and Products Aggregations](reports/screenshots/26-aggregation-sales-products.jpg)
+
+![Customers and Period Aggregations](reports/screenshots/27-aggregation-customers-period.jpg)
+
+![Order Status Aggregation](reports/screenshots/28-aggregation-order-status.jpg)
+
+---
+
+## Materialized Views
+
+Two MongoDB materialized summaries are maintained by `src/materialized_views.py`:
+
+| Materialized View | Purpose |
+|---|---|
+| `daily_sales_summary` | Daily order and sales summary |
+| `top_products_summary` | Product-level sales summary |
+
+Refresh metadata is stored in `mv_refresh_metadata`.
+
+The first execution builds the initial summaries. Later refreshes use the existing pipeline `run_id` mechanism to identify changed validated records and update only affected aggregation groups rather than rebuilding all source data.
+
+### Initial Refresh
+
+![Materialized Views Initial Refresh](reports/screenshots/29-materialized-views-initial-refresh.jpg)
+
+### Incremental Refresh with No New Changes
+
+When no new source run requires processing, the refresh remains incremental and performs no unnecessary group rewrites.
+
+![Materialized Views Incremental No Change](reports/screenshots/30-materialized-views-incremental-no-change.jpg)
+
+### Real Incremental Update
+
+A real existing-order update was passed through the original ingestion pipeline and then detected by the materialized-view refresh.
+
+![Pipeline Real Update for Incremental MV](reports/screenshots/31-pipeline-real-update-for-incremental-mv.jpg)
+
+The subsequent refresh processed the changed source record without a full rebuild.
+
+![Materialized Views Real Incremental Refresh](reports/screenshots/32-materialized-views-real-incremental-refresh.jpg)
+
+### Correct Handling of Old and New Groups
+
+An update may move an order from one date or product group to another. Updating only the new group would leave the old group stale. To prevent this, the Python and Spark upsert paths preserve `previous_mv_keys` only when an existing business record actually changes. These keys contain the previous date and product SKUs.
+
+A controlled test changed one existing order from one date to another and from one SKU to another:
+
+![Pipeline MV Group Change](reports/screenshots/33-pipeline-mv-group-change.jpg)
+
+The incremental refresh recalculated both old and new affected groups. The recorded execution showed one changed document, two affected groups, two output documents written, and `full_rebuild = false`.
+
+![MV Old and New Groups Incremental](reports/screenshots/34-mv-old-new-groups-incremental.jpg)
+
+Refresh through the API:
+
+```bash
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  http://localhost:8000/refresh-mv | python -m json.tool
+```
+
+---
+
+## Scheduled Jobs
+
+Two operational jobs are defined in `src/jobs.py`:
+
+| Job | Schedule | Purpose |
+|---|---|---|
+| `refresh_materialized_views` | Every 30 minutes | Incrementally refresh materialized summaries |
+| `generate_reports` | Every day at 01:00 | Generate and persist aggregation report snapshots |
+
+Each execution is recorded in the MongoDB `job_runs` collection with the job name, trigger type, start time, end time, duration, status, result, and error information. Aggregation snapshots are persisted in `report_snapshots`.
+
+### Manual Job Execution and Logs
+
+![Scheduled Jobs Manual Runs and Logs](reports/screenshots/35-scheduled-jobs-manual-runs-and-logs.jpg)
+
+Jobs can also be executed through FastAPI:
+
+```bash
+curl -s -X POST http://localhost:8000/jobs/generate_reports/run | python -m json.tool
+```
+
+### Automatic Scheduler
+
+Run the scheduler with:
+
+```bash
+python -m src.scheduler
+```
+
+The scheduler invokes the same `run_job()` implementation and records automatic executions with `trigger = scheduled`.
+
+![Scheduled Jobs Automatic Trigger Log](reports/screenshots/36-scheduled-jobs-automatic-trigger-log.jpg)
+
+---
+
+## Unified FastAPI
+
+Phase 2 exposes the project through one FastAPI application in `src/api.py`.
+
+Start it with:
+
+```bash
+python -m uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+Swagger UI:
+
+```text
+http://localhost:8000/docs
+```
+
+### API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | API health check |
+| `POST` | `/ingest` | Execute the existing Phase 1 ingestion pipeline |
+| `POST` | `/indexes` | Create/verify Phase 2 indexes |
+| `GET` | `/queries` | List available practical queries |
+| `GET` | `/queries/{name}` | Execute a named query |
+| `GET` | `/aggregations` | List aggregation reports |
+| `GET` | `/aggregations/{name}` | Execute a named aggregation |
+| `POST` | `/refresh-mv` | Refresh materialized views |
+| `GET` | `/jobs` | List job definitions and recent executions |
+| `POST` | `/jobs/{name}/run` | Manually execute a scheduled job |
+
+### Swagger Evidence
+
+![FastAPI Swagger Docs](reports/screenshots/37-fastapi-swagger-docs.jpg)
+
+### Job Execution through FastAPI
+
+![FastAPI Job Execution](reports/screenshots/38-fastapi-job-execution.jpg)
+
+### `/ingest` Reuses the Existing Pipeline
+
+`POST /ingest` calls `run_pipeline(input_file)` from `src/main.py`. The CLI calls the same function, so there is no duplicate ingestion implementation.
+
+```text
+CLI --------------------+
+                        |
+                        v
+                 run_pipeline()
+                        ^
+                        |
+FastAPI /ingest --------+
+```
+
+Example:
+
+```bash
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"input_file":"data/orders_test_10_update.csv"}' \
+  http://localhost:8000/ingest | python -m json.tool
+```
+
+The recorded idempotent API run processed 10 Raw rows, classified 8 as corrected and 2 as quarantine, produced 0 inserts, 0 updates and 8 unchanged accepted records, and passed the consistency check.
+
+![FastAPI Ingest Existing Pipeline](reports/screenshots/39-fastapi-ingest-existing-pipeline.jpg)
+
+---
+
+## Phase 2 Environment and Dependencies
+
+The final `requirements.txt` includes:
+
+```text
+pymongo==4.16.0
+pyspark==4.2.0
+fastapi==0.142.2
+uvicorn==0.54.0
+```
+
+An `.env.example` file documents `MONGODB_URI` without storing secrets.
+
+For MongoDB on the same machine:
+
+```bash
+export MONGODB_URI="mongodb://localhost:27017/"
+```
+
+For WSL connecting to MongoDB running as a Windows service:
+
+```bash
+export MONGODB_URI="mongodb://$(ip route | awk '/default/ {print $3}'):27017/"
+```
+
+The application uses the `midterm_data_pipeline` database.
+
+---
+
+## Phase 2 Quick Evaluation Sequence
+
+```bash
+# 1. Activate the environment and install dependencies
+source ~/midterm-venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure MongoDB when using WSL + Windows MongoDB
+export MONGODB_URI="mongodb://$(ip route | awk '/default/ {print $3}'):27017/"
+
+# 3. Initialize MongoDB
+python -m src.mongo_setup
+
+# 4. Run the existing CLI ingestion path
+python -m src.main --input "data/orders_test_10.csv"
+
+# 5. Start FastAPI
+python -m uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+Then open `http://localhost:8000/docs` and test indexes, queries, aggregations, materialized-view refresh, jobs, and ingestion from Swagger or the documented endpoints.
+
+For automatic scheduled execution, open another terminal with the same `MONGODB_URI` and run:
+
+```bash
+python -m src.scheduler
+```
+
+---
+
+## Phase 2 Validation
+
+Compile the modified and new modules:
+
+```bash
+python -m py_compile \
+  src/main.py \
+  src/api.py \
+  src/queries.py \
+  src/indexes.py \
+  src/aggregations.py \
+  src/materialized_views.py \
+  src/jobs.py \
+  src/scheduler.py \
+  src/elt_pipeline.py \
+  src/spark_upsert.py
+```
+
+Run the regression suite:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Latest verified result:
+
+```text
+Ran 21 tests
+
+OK
+```
+
+This confirms that the Phase 2 extensions preserve the tested Phase 1 router, consistency, quality-rule, and idempotency behavior.
+
+---
+
+## Phase 2 Evidence Map
+
+| Requirement | Implementation | Evidence |
+|---|---|---|
+| 5 practical queries | `src/queries.py` | Query/API executions |
+| 3 indexes | `src/indexes.py` | Screenshot 22 |
+| Compound index | `idx_payment_status_total` | Screenshot 22 + Explain |
+| 3 Explain before/after comparisons | `reports/explain_results.json` | Screenshots 19–25 |
+| 5 aggregation reports | `src/aggregations.py` | Screenshots 26–28 |
+| 2 materialized views | `src/materialized_views.py` | Screenshots 29–34 |
+| Incremental MV refresh | `run_id` + affected groups | Screenshots 30–34 |
+| 2 scheduled jobs | `src/jobs.py` | Screenshot 35 |
+| Automatic scheduling | `src/scheduler.py` | Screenshot 36 |
+| Persistent job logging | `job_runs` | Screenshots 35–36 and 38 |
+| Unified FastAPI | `src/api.py` | Screenshot 37 |
+| Existing pipeline via `/ingest` | `run_pipeline()` | Screenshot 39 |
+| Environment example | `.env.example` | Repository |
+| Dependencies | `requirements.txt` | Repository |
+
+---
+
 ## Summary
 
-The project demonstrates automatic routing, Python streaming batch loading with per-batch throughput and explicit failure reporting, Spark large-file processing, Raw-first ELT, deterministic quality correction, audit trail, quarantine, stable business key, unique index, MongoDB schema validation, deterministic deduplication, idempotent upsert, execution metrics, Spark UI evidence, 21 passing automated tests, and successful 500K, 1 GB and 5 GB runs.
+The project demonstrates a complete two-phase Big Data architecture: automatic Python Batch/PySpark routing, Raw-first ELT, deterministic data-quality correction, quarantine, audit trail, deduplication, idempotent upsert, execution metrics, MongoDB schema validation, practical indexed queries, measured execution-plan optimization, five analytical aggregation reports, two incrementally maintained materialized views, scheduled operational jobs with persistent execution logs, and a unified FastAPI interface that reuses the original ingestion pipeline. The regression suite remains at 21 passing tests, and the recorded evidence includes successful 500K, 1 GB and 5 GB Spark processing together with the complete Phase 2 execution evidence.

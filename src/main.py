@@ -32,21 +32,7 @@ from src.spark_loader import (
 
 DEFAULT_INPUT_FILE = "data/orders_test_10.csv"
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run the hybrid data pipeline."
-        )
-    )
-
-    parser.add_argument(
-        "--input",
-        default=DEFAULT_INPUT_FILE,
-        help="Path to the CSV file.",
-    )
-
-    args = parser.parse_args()
-
+def run_pipeline(input_file):
     print(
         "\n=== Midterm Data Pipeline ==="
     )
@@ -56,14 +42,14 @@ def main():
     )
 
     engine = choose_engine(
-        args.input
+        input_file
     )
 
     show_database_info()
 
     file_size_mb = (
         os.path.getsize(
-            args.input
+            input_file
         )
         / (
             1024
@@ -74,7 +60,7 @@ def main():
     if engine == "python_batch":
         load_result = (
             load_csv_to_raw(
-                args.input
+                input_file
             )
         )
 
@@ -185,7 +171,7 @@ def main():
 
             "file_name": (
                 os.path.basename(
-                    args.input
+                    input_file
                 )
             ),
 
@@ -301,10 +287,26 @@ def main():
             metrics
         )
 
+        return {
+            "run_id": run_id,
+            "engine": engine,
+            "file_name": os.path.basename(input_file),
+            "file_size_mb": round(file_size_mb, 2),
+            "raw_count": raw_count,
+            "valid": result["valid"],
+            "corrected": result["corrected"],
+            "quarantine": result["quarantine"],
+            "inserted": result["inserted"],
+            "updated": result["updated"],
+            "unchanged": result["unchanged"],
+            "errors": result["errors"],
+            "consistency_check": raw_count == processed,
+        }
+
     else:
         result = (
             load_large_csv_to_raw(
-                args.input
+                input_file
             )
         )
 
@@ -376,7 +378,7 @@ def main():
 
             "file_name": (
                 os.path.basename(
-                    args.input
+                    input_file
                 )
             ),
 
@@ -497,6 +499,45 @@ def main():
         save_run_metrics(
             metrics
         )
+
+        return {
+            "run_id": result["run_id"],
+            "engine": engine,
+            "file_name": os.path.basename(input_file),
+            "file_size_mb": round(file_size_mb, 2),
+            "raw_count": result["raw_count"],
+            "valid": result["valid_count"],
+            "corrected": result["corrected_count"],
+            "quarantine": result["quarantine_count"],
+            "inserted": result["inserted"],
+            "updated": result["updated"],
+            "unchanged": result["unchanged"],
+            "errors": result["error_counts"],
+            "consistency_check": (
+                result["classified_count"]
+                == result["raw_count"]
+            ),
+        }
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the hybrid data pipeline."
+        )
+    )
+
+    parser.add_argument(
+        "--input",
+        default=DEFAULT_INPUT_FILE,
+        help="Path to the CSV file.",
+    )
+
+    args = parser.parse_args()
+
+    run_pipeline(
+        args.input
+    )
 
 
 if __name__ == "__main__":

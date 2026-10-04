@@ -1,0 +1,186 @@
+{
+  "generated_at": "2026-10-03T21:01:04.702537+00:00",
+  "description": "MongoDB executionStats comparison before and after Phase 2 indexes.",
+  "before_indexes": {
+    "orders_by_city": {
+      "query": "orders_by_city",
+      "nReturned": 1154,
+      "executionTimeMillis": 6,
+      "totalKeysExamined": 0,
+      "totalDocsExamined": 10990,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "COLLSCAN",
+        "filter": {
+          "city": {
+            "$eq": "تعز"
+          }
+        },
+        "nss": "midterm_data_pipeline.orders_validated",
+        "direction": "forward"
+      }
+    },
+    "customer_orders": {
+      "query": "customer_orders",
+      "nReturned": 1,
+      "executionTimeMillis": 8,
+      "totalKeysExamined": 0,
+      "totalDocsExamined": 10990,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "COLLSCAN",
+        "filter": {
+          "customer_id": {
+            "$eq": "عميل-1"
+          }
+        },
+        "nss": "midterm_data_pipeline.orders_validated",
+        "direction": "forward"
+      }
+    },
+    "high_value_paid_orders": {
+      "query": "high_value_paid_orders",
+      "nReturned": 2172,
+      "executionTimeMillis": 13,
+      "totalKeysExamined": 0,
+      "totalDocsExamined": 10990,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "SORT",
+        "sortPattern": {
+          "total_amount": -1
+        },
+        "memLimit": 104857600,
+        "type": "simple",
+        "inputStage": {
+          "stage": "COLLSCAN",
+          "filter": {
+            "$and": [
+              {
+                "payment_status": {
+                  "$eq": "paid"
+                }
+              },
+              {
+                "total_amount": {
+                  "$gte": 100000
+                }
+              }
+            ]
+          },
+          "nss": "midterm_data_pipeline.orders_validated",
+          "direction": "forward"
+        }
+      }
+    }
+  },
+  "after_indexes": {
+    "orders_by_city": {
+      "query": "orders_by_city",
+      "nReturned": 1154,
+      "executionTimeMillis": 2,
+      "totalKeysExamined": 1154,
+      "totalDocsExamined": 1154,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "FETCH",
+        "nss": "midterm_data_pipeline.orders_validated",
+        "inputStage": {
+          "stage": "IXSCAN",
+          "nss": "midterm_data_pipeline.orders_validated",
+          "keyPattern": {
+            "city": 1
+          },
+          "indexName": "idx_city",
+          "isMultiKey": false,
+          "multiKeyPaths": {
+            "city": []
+          },
+          "isUnique": false,
+          "isSparse": false,
+          "isPartial": false,
+          "indexVersion": 2,
+          "direction": "forward",
+          "indexBounds": {
+            "city": [
+              "[\"تعز\", \"تعز\"]"
+            ]
+          }
+        }
+      }
+    },
+    "customer_orders": {
+      "query": "customer_orders",
+      "nReturned": 1,
+      "executionTimeMillis": 1,
+      "totalKeysExamined": 1,
+      "totalDocsExamined": 1,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "FETCH",
+        "nss": "midterm_data_pipeline.orders_validated",
+        "inputStage": {
+          "stage": "IXSCAN",
+          "nss": "midterm_data_pipeline.orders_validated",
+          "keyPattern": {
+            "customer_id": 1
+          },
+          "indexName": "idx_customer_id",
+          "isMultiKey": false,
+          "multiKeyPaths": {
+            "customer_id": []
+          },
+          "isUnique": false,
+          "isSparse": false,
+          "isPartial": false,
+          "indexVersion": 2,
+          "direction": "forward",
+          "indexBounds": {
+            "customer_id": [
+              "[\"عميل-1\", \"عميل-1\"]"
+            ]
+          }
+        }
+      }
+    },
+    "high_value_paid_orders": {
+      "query": "high_value_paid_orders",
+      "nReturned": 2172,
+      "executionTimeMillis": 4,
+      "totalKeysExamined": 2172,
+      "totalDocsExamined": 2172,
+      "winningPlan": {
+        "isCached": false,
+        "stage": "FETCH",
+        "nss": "midterm_data_pipeline.orders_validated",
+        "inputStage": {
+          "stage": "IXSCAN",
+          "nss": "midterm_data_pipeline.orders_validated",
+          "keyPattern": {
+            "payment_status": 1,
+            "total_amount": -1
+          },
+          "indexName": "idx_payment_status_total",
+          "isMultiKey": false,
+          "multiKeyPaths": {
+            "payment_status": [],
+            "total_amount": []
+          },
+          "isUnique": false,
+          "isSparse": false,
+          "isPartial": false,
+          "indexVersion": 2,
+          "direction": "forward",
+          "indexBounds": {
+            "payment_status": [
+              "[\"paid\", \"paid\"]"
+            ],
+            "total_amount": [
+              "[inf, 100000]"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

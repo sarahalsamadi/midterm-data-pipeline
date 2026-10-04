@@ -72,6 +72,23 @@ def business_documents_equal(
         )
     )
 
+def extract_mv_keys(document):
+    order_date = document.get("order_date")
+    date_value = None
+
+    if isinstance(order_date, str) and len(order_date) >= 10:
+        date_value = order_date[:10]
+
+    skus = sorted({
+        item.get("sku")
+        for item in document.get("items", [])
+        if isinstance(item, dict) and item.get("sku")
+    })
+
+    return {
+        "date": date_value,
+        "skus": skus,
+    }
 
 def process_raw_run(run_id):
     client = MongoClient(
@@ -508,6 +525,11 @@ def process_raw_run(run_id):
                 unchanged_count += 1
 
             else:
+                final_document[
+                    "previous_mv_keys"
+                ] = extract_mv_keys(
+                    existing
+                )
                 validated_collection.update_one(
                     {
                         "order_id": order_id
