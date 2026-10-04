@@ -196,6 +196,14 @@ def _full_refresh_daily(db, run_id):
         unique=True,
         name="uq_daily_sales_date",
     )
+    source.update_many(
+        {},
+        {
+            "$set": {
+                "mv_pending_dates": []
+            }
+        },
+    )
 
     _save_metadata(
         db,
@@ -231,7 +239,14 @@ def _full_refresh_products(db, run_id):
         unique=True,
         name="uq_top_products_sku",
     )
-
+    source.update_many(
+        {},
+        {
+            "$set": {
+                "mv_pending_skus": []
+            }
+        },
+    )
     _save_metadata(
         db,
         PRODUCT_VIEW,
@@ -256,36 +271,35 @@ def _incremental_daily(db, run_id):
 
     changed = list(
         source.find(
-            {"last_run_id": run_id},
-            {"order_date": 1,
-            "previous_mv_keys.date": 1,
-            "_id": 0,},
+            {
+                "mv_pending_dates": {
+                    "$exists": True,
+                    "$ne": [],
+                }
+            },
+            {
+                "mv_pending_dates": 1,
+            },
         )
     )
 
     affected_dates = set()
 
     for row in changed:
-        value = row.get("order_date")
-
-        if isinstance(value, str) and len(value) >= 10:
-            affected_dates.add(value[:10])
-
-        previous_date = (
-            row.get(
-                "previous_mv_keys",
-                {},
-            ).get("date")
-        )
-
-        if previous_date:
-            affected_dates.add(
-                previous_date
-            )
+        for date_value in row.get(
+            "mv_pending_dates",
+            [],
+        ):
+            if date_value:
+                affected_dates.add(
+                    date_value
+                )
 
     written = 0
 
-    for date_value in sorted(affected_dates):
+    for date_value in sorted(
+        affected_dates
+    ):
         rows = list(
             source.aggregate(
                 _daily_pipeline(
@@ -306,7 +320,26 @@ def _incremental_daily(db, run_id):
             )
             written += 1
         else:
-            target.delete_one({"date": date_value})
+            target.delete_one(
+                {"date": date_value}
+            )
+
+    if changed:
+        source.update_many(
+            {
+                "_id": {
+                    "$in": [
+                        row["_id"]
+                        for row in changed
+                    ]
+                }
+            },
+            {
+                "$set": {
+                    "mv_pending_dates": []
+                }
+            },
+        )
 
     _save_metadata(
         db,
@@ -322,7 +355,9 @@ def _incremental_daily(db, run_id):
         "mode": "incremental",
         "run_id": run_id,
         "changed_documents": len(changed),
-        "affected_groups": len(affected_dates),
+        "affected_groups": len(
+            affected_dates
+        ),
         "output_documents_written": written,
         "full_rebuild": False,
     }
@@ -334,11 +369,14 @@ def _incremental_products(db, run_id):
 
     changed = list(
         source.find(
-            {"last_run_id": run_id},
             {
-                "items.sku": 1,
-                "previous_mv_keys.skus": 1,
-                "_id": 0,
+                "mv_pending_skus": {
+                    "$exists": True,
+                    "$ne": [],
+                }
+            },
+            {
+                "mv_pending_skus": 1,
             },
         )
     )
@@ -346,29 +384,20 @@ def _incremental_products(db, run_id):
     affected_skus = set()
 
     for row in changed:
-        for item in row.get("items", []):
-            sku = item.get("sku")
-
+        for sku in row.get(
+            "mv_pending_skus",
+            [],
+        ):
             if sku:
-                affected_skus.add(sku)
-        previous_skus = (
-            row.get(
-                "previous_mv_keys",
-                {},
-            ).get(
-                "skus",
-                [],
-            )
-        )
-    
-
-    for sku in previous_skus:
-        if sku:
-            affected_skus.add(sku)
+                affected_skus.add(
+                    sku
+                )
 
     written = 0
 
-    for sku in sorted(affected_skus):
+    for sku in sorted(
+        affected_skus
+    ):
         rows = list(
             source.aggregate(
                 _product_pipeline(
@@ -397,7 +426,26 @@ def _incremental_products(db, run_id):
             )
             written += 1
         else:
-            target.delete_one({"sku": sku})
+            target.delete_one(
+                {"sku": sku}
+            )
+
+    if changed:
+        source.update_many(
+            {
+                "_id": {
+                    "$in": [
+                        row["_id"]
+                        for row in changed
+                    ]
+                }
+            },
+            {
+                "$set": {
+                    "mv_pending_skus": []
+                }
+            },
+        )
 
     _save_metadata(
         db,
@@ -413,7 +461,9 @@ def _incremental_products(db, run_id):
         "mode": "incremental",
         "run_id": run_id,
         "changed_documents": len(changed),
-        "affected_groups": len(affected_skus),
+        "affected_groups": len(
+            affected_skus
+        ),
         "output_documents_written": written,
         "full_rebuild": False,
     }
@@ -442,18 +492,6 @@ def refresh_materialized_view(view_name, run_id=None):
                 db,
                 current_run_id,
             )
-
-        if metadata.get("last_run_id") == current_run_id:
-            return {
-                "view": view_name,
-                "mode": "incremental",
-                "run_id": current_run_id,
-                "changed_documents": 0,
-                "affected_groups": 0,
-                "output_documents_written": 0,
-                "full_rebuild": False,
-                "message": "No new pipeline run since last refresh.",
-            }
 
         if view_name == DAILY_VIEW:
             return _incremental_daily(

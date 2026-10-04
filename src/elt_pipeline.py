@@ -505,7 +505,25 @@ def process_raw_run(run_id):
                 )
             )
 
+            current_mv_keys = extract_mv_keys(
+                final_document
+            )
+
             if existing is None:
+                final_document[
+                    "mv_pending_dates"
+                ] = (
+                    [current_mv_keys["date"]]
+                    if current_mv_keys["date"]
+                    else []
+                )
+
+                final_document[
+                    "mv_pending_skus"
+                ] = current_mv_keys[
+                    "skus"
+                ]
+
                 validated_collection.update_one(
                     {
                         "order_id": order_id
@@ -525,11 +543,58 @@ def process_raw_run(run_id):
                 unchanged_count += 1
 
             else:
-                final_document[
-                    "previous_mv_keys"
-                ] = extract_mv_keys(
+                previous_mv_keys = extract_mv_keys(
                     existing
                 )
+
+                final_document[
+                    "previous_mv_keys"
+                ] = previous_mv_keys
+
+                pending_dates = set(
+                    existing.get(
+                        "mv_pending_dates",
+                        [],
+                    )
+                )
+
+                pending_skus = set(
+                    existing.get(
+                        "mv_pending_skus",
+                        [],
+                    )
+                )
+
+                if previous_mv_keys["date"]:
+                    pending_dates.add(
+                        previous_mv_keys["date"]
+                    )
+
+                if current_mv_keys["date"]:
+                    pending_dates.add(
+                        current_mv_keys["date"]
+                    )
+
+                pending_skus.update(
+                    previous_mv_keys["skus"]
+                )
+
+                pending_skus.update(
+                    current_mv_keys["skus"]
+                )
+
+                final_document[
+                    "mv_pending_dates"
+                ] = sorted(
+                    pending_dates
+                )
+
+                final_document[
+                    "mv_pending_skus"
+                ] = sorted(
+                    pending_skus
+                )
+
                 validated_collection.update_one(
                     {
                         "order_id": order_id

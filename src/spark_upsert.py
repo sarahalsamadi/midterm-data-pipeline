@@ -200,8 +200,26 @@ def process_batch(
             )
         )
 
+        current_mv_keys = extract_mv_keys(
+            record
+        )
+
         if existing is None:
             inserted += 1
+
+            record[
+                "mv_pending_dates"
+            ] = (
+                [current_mv_keys["date"]]
+                if current_mv_keys["date"]
+                else []
+            )
+
+            record[
+                "mv_pending_skus"
+            ] = current_mv_keys[
+                "skus"
+            ]
 
             operations.append(
                 UpdateOne(
@@ -225,10 +243,57 @@ def process_batch(
             continue
 
         updated += 1
+
+        previous_mv_keys = extract_mv_keys(
+            existing
+        )
+
         record[
             "previous_mv_keys"
-        ] = extract_mv_keys(
-            existing
+        ] = previous_mv_keys
+
+        pending_dates = set(
+            existing.get(
+                "mv_pending_dates",
+                [],
+            )
+        )
+
+        pending_skus = set(
+            existing.get(
+                "mv_pending_skus",
+                [],
+            )
+        )
+
+        if previous_mv_keys["date"]:
+            pending_dates.add(
+                previous_mv_keys["date"]
+            )
+
+        if current_mv_keys["date"]:
+            pending_dates.add(
+                current_mv_keys["date"]
+            )
+
+        pending_skus.update(
+            previous_mv_keys["skus"]
+        )
+
+        pending_skus.update(
+            current_mv_keys["skus"]
+        )
+
+        record[
+            "mv_pending_dates"
+        ] = sorted(
+            pending_dates
+        )
+
+        record[
+            "mv_pending_skus"
+        ] = sorted(
+            pending_skus
         )
         operations.append(
             UpdateOne(
