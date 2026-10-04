@@ -299,8 +299,10 @@ master = local[*]
 spark.driver.memory = 6g
 spark.executor.memory = 6g
 spark.sql.shuffle.partitions = 64
-spark.local.dir = /mnt/d/spark-temp
+spark.local.dir = optional via SPARK_LOCAL_DIR
 ```
+
+`SPARK_LOCAL_DIR` is optional. When it is defined, the pipeline passes it to Spark as the local working directory. When it is not defined, Spark uses the platform/cluster default temporary storage location. This removes the previous machine-specific dependency on `/mnt/d/spark-temp`.
 
 ### Spark Input Partitions
 
@@ -341,12 +343,25 @@ MongoDB orders_validated
 
 ## Spark Storage Strategy
 
-Large reusable Spark DataFrames use `StorageLevel.DISK_ONLY`. Spark temporary storage is configured as `/mnt/d/spark-temp`.
+Large reusable Spark DataFrames use `StorageLevel.DISK_ONLY`. Spark temporary storage is portable and is no longer tied to a hardcoded machine-specific path.
+
+If `SPARK_LOCAL_DIR` is defined, the pipeline uses it as Spark's local working directory. Otherwise, Spark uses its default system or cluster-managed temporary directory.
+
+Example for WSL:
 
 ```bash
-mkdir -p /mnt/d/spark-temp
-df -h /mnt/d/spark-temp
+export SPARK_LOCAL_DIR=/mnt/d/spark-temp
+mkdir -p "$SPARK_LOCAL_DIR"
 ```
+
+Example for Linux:
+
+```bash
+export SPARK_LOCAL_DIR=/tmp/spark-temp
+mkdir -p "$SPARK_LOCAL_DIR"
+```
+
+`SPARK_LOCAL_DIR` is optional. Cluster managers may override `spark.local.dir` according to their own runtime configuration.
 
 ---
 
@@ -393,7 +408,20 @@ The pipeline never guesses ambiguous values. Unsafe records are quarantined.
 
 ## Correction Audit Trail
 
-Every corrected final record preserves `field`, `original_value`, `corrected_value`, and `rule_code`.
+Every corrected final record preserves a structured correction object with the four required fields: `field`, `original_value`, `corrected_value`, and `rule_code`.
+
+The Python Batch path and the PySpark path now produce the same structured audit model rather than storing Spark corrections as display strings. The MongoDB validator also enforces the correction-object shape on `orders_validated`.
+
+Example:
+
+```json
+{
+  "field": "currency",
+  "original_value": "ريال يمني",
+  "corrected_value": "YER",
+  "rule_code": "CURRENCY_NORMALIZE"
+}
+```
 
 ![MongoDB Corrected](reports/screenshots/03-mongodb-corrected.png)
 
@@ -449,7 +477,7 @@ orders_quarantine
 
 ![Validated Unique Index](reports/screenshots/05-mongodb-validated-index.png)
 
-MongoDB schema validation is configured on `orders_validated`.
+MongoDB schema validation is configured on `orders_validated`. The validator enforces the structured correction audit fields and also documents the incremental materialized-view tracking fields (`previous_mv_keys`, `mv_pending_dates`, and `mv_pending_skus`).
 
 ![Validated Schema Validator](reports/screenshots/06-mongodb-validator.png)
 
@@ -533,23 +561,33 @@ Successful executions are appended to `reports/results.json`. Metrics include ru
 
 ## Environment Setup
 
+From the cloned project directory:
+
 ```bash
-cd "/mnt/d/4 Year/Big Data/midterm-data-pipeline"
-source ~/midterm-venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Find current WSL gateway:
+For MongoDB running on the same machine:
 
 ```bash
-ip route | grep default
+export MONGODB_URI="mongodb://localhost:27017/"
 ```
 
-Then:
+For WSL connecting to MongoDB running as a Windows service:
 
 ```bash
-export MONGODB_URI="mongodb://<CURRENT_GATEWAY_IP>:27017/"
+export MONGODB_URI="mongodb://$(ip route | awk '/default/ {print $3}'):27017/"
 ```
+
+Optional Spark local storage:
+
+```bash
+export SPARK_LOCAL_DIR=/path/to/spark-temp
+```
+
+If `SPARK_LOCAL_DIR` is not set, Spark uses its default temporary directory.
 
 Test MongoDB:
 
@@ -557,7 +595,7 @@ Test MongoDB:
 python - <<'PY_CHECK_MONGO'
 import os
 from pymongo import MongoClient
-client = MongoClient(os.environ["MONGODB_URI"], serverSelectionTimeoutMS=5000)
+client = MongoClient(os.environ.get("MONGODB_URI", "mongodb://localhost:27017/"), serverSelectionTimeoutMS=5000)
 print(client.admin.command("ping"))
 client.close()
 PY_CHECK_MONGO
@@ -569,16 +607,11 @@ Initialize MongoDB:
 python -m src.mongo_setup
 ```
 
-Prepare Spark storage:
-
-```bash
-mkdir -p /mnt/d/spark-temp
-df -h /mnt/d/spark-temp
-```
-
 ---
 
 ## Run Commands
+
+The CLI requires an explicit `--input` path. No development filename is used as a runtime default.
 
 ```bash
 python -m src.main --input "data/orders_test_10.csv"
@@ -586,6 +619,12 @@ python -m src.main --input "data/orders_batch_test.csv"
 python -m src.main --input "data/orders_spark_test.csv"
 python -m src.main --input "data/orders_large_1gb.csv"
 python -m src.main --input "data/orders_large_5gb.csv"
+```
+
+An evaluator can use any compatible CSV file:
+
+```bash
+python -m src.main --input "/path/to/evaluator_orders.csv"
 ```
 
 ---
@@ -985,7 +1024,24 @@ Two MongoDB materialized summaries are maintained by `src/materialized_views.py`
 
 Refresh metadata is stored in `mv_refresh_metadata`.
 
-The first execution builds the initial summaries. Later refreshes use the existing pipeline `run_id` mechanism to identify changed validated records and update only affected aggregation groups rather than rebuilding all source data.
+The first execution performs an initial full build of both materialized views. Later executions use explicit pending-change tracking and recalculate only affected aggregation groups instead of rebuilding the full summaries.
+
+Each accepted order can maintain:
+
+- `mv_pending_dates` — dates whose daily summary may need recalculation;
+- `mv_pending_skus` — product SKUs whose product summary may need recalculation;
+- `previous_mv_keys` — the immediately previous date/SKU state retained for traceability when an existing business record changes.
+
+When a new order is inserted, its current date and SKUs are marked pending. When an existing order changes, the upsert path preserves any already pending groups and adds both the previous and current date/SKU groups.
+
+This prevents intermediate changes from being lost when the same order is updated several times before one materialized-view refresh. For example:
+
+```text
+Order state: A -> B -> C -> refresh
+Pending groups: A + B + C
+```
+
+After a successful refresh, only the processed pending markers are cleared. A refresh with no pending changes performs no group rewrites and does not rebuild the full materialized view.
 
 ### Initial Refresh
 
@@ -1009,13 +1065,28 @@ The subsequent refresh processed the changed source record without a full rebuil
 
 ### Correct Handling of Old and New Groups
 
-An update may move an order from one date or product group to another. Updating only the new group would leave the old group stale. To prevent this, the Python and Spark upsert paths preserve `previous_mv_keys` only when an existing business record actually changes. These keys contain the previous date and product SKUs.
+An update may move an order from one date or product group to another. Recalculating only the new group would leave the old group stale. Both the Python Batch and PySpark upsert paths therefore maintain pending date and SKU sets. Existing pending groups are preserved and combined with both the old and new groups whenever business data changes.
 
-A controlled test changed one existing order from one date to another and from one SKU to another:
+This also handles multiple updates before a single refresh:
+
+```text
+2026-10-01 / SKU-A
+        |
+        v
+2026-10-02 / SKU-B
+        |
+        v
+2026-10-03 / SKU-C
+        |
+        v
+Incremental refresh
+```
+
+A dedicated multi-update validation confirmed that all three dates and SKUs remained pending before refresh, all affected groups were recalculated, stale old groups were removed, the current group remained correct, the pending markers were cleared after success, and a second refresh with no changes processed zero groups with `full_rebuild = false`.
+
+A controlled project example also demonstrates a real old-group/new-group change:
 
 ![Pipeline MV Group Change](reports/screenshots/33-pipeline-mv-group-change.jpg)
-
-The incremental refresh recalculated both old and new affected groups. The recorded execution showed one changed document, two affected groups, two output documents written, and `full_rebuild = false`.
 
 ![MV Old and New Groups Incremental](reports/screenshots/34-mv-old-new-groups-incremental.jpg)
 
@@ -1144,7 +1215,7 @@ fastapi==0.142.2
 uvicorn==0.54.0
 ```
 
-An `.env.example` file documents `MONGODB_URI` without storing secrets.
+An `.env.example` file documents `MONGODB_URI` and the optional `SPARK_LOCAL_DIR` without storing secrets.
 
 For MongoDB on the same machine:
 
@@ -1156,6 +1227,12 @@ For WSL connecting to MongoDB running as a Windows service:
 
 ```bash
 export MONGODB_URI="mongodb://$(ip route | awk '/default/ {print $3}'):27017/"
+```
+
+Optional Spark local storage can be configured without modifying source code:
+
+```bash
+export SPARK_LOCAL_DIR=/path/to/spark-temp
 ```
 
 The application uses the `midterm_data_pipeline` database.
@@ -1172,13 +1249,16 @@ pip install -r requirements.txt
 # 2. Configure MongoDB when using WSL + Windows MongoDB
 export MONGODB_URI="mongodb://$(ip route | awk '/default/ {print $3}'):27017/"
 
-# 3. Initialize MongoDB
+# 3. Optional: choose a Spark local working directory
+# export SPARK_LOCAL_DIR=/path/to/spark-temp
+
+# 4. Initialize MongoDB
 python -m src.mongo_setup
 
-# 4. Run the existing CLI ingestion path
-python -m src.main --input "data/orders_test_10.csv"
+# 5. Run the existing CLI ingestion path
+python -m src.main --input "/path/to/orders.csv"
 
-# 5. Start FastAPI
+# 6. Start FastAPI
 python -m uvicorn src.api:app --host 0.0.0.0 --port 8000
 ```
 
@@ -1225,7 +1305,7 @@ The evaluator can provide any compatible CSV file and run:
 python -m src.main --input "/path/to/new_orders.csv"
 ```
 
-The input filename, file size, record count, and processing results are not hardcoded.
+The input filename, file size, record count, and processing results are not hardcoded. The CLI requires `--input`, so an evaluator-supplied dataset is always explicit.
 
 The existing file router automatically selects the processing engine according to the actual input file size:
 
@@ -1457,7 +1537,11 @@ python -m py_compile \
   src/jobs.py \
   src/scheduler.py \
   src/elt_pipeline.py \
-  src/spark_upsert.py
+  src/spark_upsert.py \
+  src/spark_transform.py \
+  src/spark_loader.py \
+  src/mongo_setup.py \
+  config/settings.py
 ```
 
 Run the regression suite:
@@ -1474,7 +1558,7 @@ Ran 21 tests
 OK
 ```
 
-This confirms that the Phase 2 extensions preserve the tested Phase 1 router, consistency, quality-rule, and idempotency behavior.
+This confirms that the Phase 2 extensions preserve the tested Phase 1 router, consistency, quality-rule, and idempotency behavior. Additional manual validation was also completed for the structured Spark audit trail, MongoDB correction schema validation, multi-update incremental materialized views, Spark portability through `SPARK_LOCAL_DIR`, and the required CLI `--input` behavior.
 
 ---
 
@@ -1488,7 +1572,7 @@ This confirms that the Phase 2 extensions preserve the tested Phase 1 router, co
 | 3 Explain before/after comparisons | `reports/explain_results.json` | Screenshots 19–25 |
 | 5 aggregation reports | `src/aggregations.py` | Screenshots 26–28 |
 | 2 materialized views | `src/materialized_views.py` | Screenshots 29–34 |
-| Incremental MV refresh | `run_id` + affected groups | Screenshots 30–34 |
+| Incremental MV refresh | `mv_pending_dates` + `mv_pending_skus` + affected groups | Screenshots 30–34 + multi-update validation |
 | 2 scheduled jobs | `src/jobs.py` | Screenshot 35 |
 | Automatic scheduling | `src/scheduler.py` | Screenshot 36 |
 | Persistent job logging | `job_runs` | Screenshots 35–36 and 38 |
@@ -1501,4 +1585,4 @@ This confirms that the Phase 2 extensions preserve the tested Phase 1 router, co
 
 ## Summary
 
-The project demonstrates a complete two-phase Big Data architecture: automatic Python Batch/PySpark routing, Raw-first ELT, deterministic data-quality correction, quarantine, audit trail, deduplication, idempotent upsert, execution metrics, MongoDB schema validation, practical indexed queries, measured execution-plan optimization, five analytical aggregation reports, two incrementally maintained materialized views, scheduled operational jobs with persistent execution logs, and a unified FastAPI interface that reuses the original ingestion pipeline. The regression suite remains at 21 passing tests, and the recorded evidence includes successful 500K, 1 GB and 5 GB Spark processing together with the complete Phase 2 execution evidence.
+The project demonstrates a complete two-phase Big Data architecture: automatic Python Batch/PySpark routing, Raw-first ELT, deterministic data-quality correction, structured audit trail in both Python and PySpark, quarantine, deduplication, idempotent upsert, execution metrics, MongoDB schema validation, practical indexed queries, measured execution-plan optimization, five analytical aggregation reports, two incrementally maintained materialized views with explicit pending-group tracking, scheduled operational jobs with persistent execution logs, and a unified FastAPI interface that reuses the original ingestion pipeline. The runtime no longer depends on a machine-specific Spark temp path, the CLI requires an evaluator-supplied `--input`, the regression suite remains at 21 passing tests, and the recorded evidence includes successful 500K, 1 GB and 5 GB Spark processing together with the complete Phase 2 execution evidence.

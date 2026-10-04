@@ -157,6 +157,53 @@ VALIDATED_SCHEMA = {
                     "array",
                     "null",
                 ],
+
+                "items": {
+                    "bsonType": "object",
+
+                    "required": [
+                        "field",
+                        "original_value",
+                        "corrected_value",
+                        "rule_code",
+                    ],
+
+                    "properties": {
+                        "field": {
+                            "bsonType": "string",
+                        },
+
+                        "original_value": {
+                            "bsonType": [
+                                "string",
+                                "double",
+                                "int",
+                                "long",
+                                "decimal",
+                                "bool",
+                                "null",
+                            ],
+                        },
+
+                        "corrected_value": {
+                            "bsonType": [
+                                "string",
+                                "double",
+                                "int",
+                                "long",
+                                "decimal",
+                                "bool",
+                                "null",
+                            ],
+                        },
+
+                        "rule_code": {
+                            "bsonType": "string",
+                        },
+                    },
+
+                    "additionalProperties": False,
+                },
             },
 
             "last_run_id": {
@@ -164,6 +211,51 @@ VALIDATED_SCHEMA = {
                     "string",
                     "null",
                 ],
+            },
+
+            "previous_mv_keys": {
+                "bsonType": [
+                    "object",
+                    "null",
+                ],
+
+                "properties": {
+                    "date": {
+                        "bsonType": [
+                            "string",
+                            "null",
+                        ],
+                    },
+
+                    "skus": {
+                        "bsonType": "array",
+                        "items": {
+                            "bsonType": "string",
+                        },
+                    },
+                },
+            },
+
+            "mv_pending_dates": {
+                "bsonType": [
+                    "array",
+                    "null",
+                ],
+
+                "items": {
+                    "bsonType": "string",
+                },
+            },
+
+            "mv_pending_skus": {
+                "bsonType": [
+                    "array",
+                    "null",
+                ],
+
+                "items": {
+                    "bsonType": "string",
+                },
             },
         },
     }
@@ -272,6 +364,7 @@ def ensure_indexes(
     print(
         "Unique order_id index created."
     )
+
 
 def initialize_database():
     client, database = (

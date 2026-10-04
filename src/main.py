@@ -30,7 +30,7 @@ from src.spark_loader import (
     load_large_csv_to_raw,
 )
 
-DEFAULT_INPUT_FILE = "data/orders_test_10.csv"
+
 
 def run_pipeline(input_file):
     print(
@@ -529,7 +529,7 @@ def main():
 
     parser.add_argument(
         "--input",
-        default=DEFAULT_INPUT_FILE,
+        required=True,
         help="Path to the CSV file.",
     )
 

@@ -4,13 +4,13 @@ from pyspark.sql.functions import (
     array,
     coalesce,
     col,
-    concat,
     filter,
     from_json,
     lit,
     lower,
     regexp_replace,
     size,
+    struct,
     transform,
     translate,
     trim,
@@ -57,6 +57,39 @@ ITEM_SCHEMA = ArrayType(
         ),
     ])
 )
+
+
+def correction_record(
+    field,
+    original_value,
+    corrected_value,
+    rule_code,
+):
+    return struct(
+        lit(
+            field
+        ).alias(
+            "field"
+        ),
+
+        original_value.cast(
+            "string"
+        ).alias(
+            "original_value"
+        ),
+
+        corrected_value.cast(
+            "string"
+        ).alias(
+            "corrected_value"
+        ),
+
+        lit(
+            rule_code
+        ).alias(
+            "rule_code"
+        ),
+    )
 
 
 def number_column(column):
@@ -712,6 +745,7 @@ def transform_spark_raw(
         ),
     )
 
+
     df = df.withColumn(
         "corrections_raw",
         array(
@@ -729,21 +763,15 @@ def transform_spark_raw(
                 & col(
                     "order_date_clean"
                 ).isNotNull(),
-                concat(
-                    lit(
-                        "DATE_NORMALIZE: "
-                    ),
+                correction_record(
+                    "order_date",
                     raw[
                         "order_date"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "order_date_clean"
-                    ).cast(
-                        "string"
                     ),
+                    "DATE_NORMALIZE",
                 ),
             ),
 
@@ -754,19 +782,15 @@ def transform_spark_raw(
                 != col(
                     "phone_clean"
                 ),
-                concat(
-                    lit(
-                        "PHONE_NORMALIZE: "
-                    ),
+                correction_record(
+                    "customer_phone",
                     raw[
                         "customer_phone"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "phone_clean"
                     ),
+                    "PHONE_NORMALIZE",
                 ),
             ),
 
@@ -781,19 +805,15 @@ def transform_spark_raw(
                 != col(
                     "email_clean"
                 ),
-                concat(
-                    lit(
-                        "EMAIL_NORMALIZE: "
-                    ),
+                correction_record(
+                    "customer_email",
                     raw[
                         "customer_email"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "email_clean"
                     ),
+                    "EMAIL_NORMALIZE",
                 ),
             ),
 
@@ -806,19 +826,15 @@ def transform_spark_raw(
                 != col(
                     "status_clean"
                 ),
-                concat(
-                    lit(
-                        "STATUS_ALIAS: "
-                    ),
+                correction_record(
+                    "status",
                     raw[
                         "status"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "status_clean"
                     ),
+                    "STATUS_ALIAS",
                 ),
             ),
 
@@ -831,19 +847,15 @@ def transform_spark_raw(
                 != col(
                     "payment_status_clean"
                 ),
-                concat(
-                    lit(
-                        "PAYMENT_STATUS_ALIAS: "
-                    ),
+                correction_record(
+                    "payment_status",
                     raw[
                         "payment_status"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "payment_status_clean"
                     ),
+                    "PAYMENT_STATUS_ALIAS",
                 ),
             ),
 
@@ -856,19 +868,15 @@ def transform_spark_raw(
                 != col(
                     "currency_clean"
                 ),
-                concat(
-                    lit(
-                        "CURRENCY_NORMALIZE: "
-                    ),
+                correction_record(
+                    "currency",
                     raw[
                         "currency"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "currency_clean"
                     ),
+                    "CURRENCY_NORMALIZE",
                 ),
             ),
 
@@ -881,21 +889,15 @@ def transform_spark_raw(
                 ).cast(
                     "string"
                 ),
-                concat(
-                    lit(
-                        "NUMBER_NORMALIZE: "
-                    ),
+                correction_record(
+                    "delivery_cost",
                     raw[
                         "delivery_cost"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "delivery_cost_clean"
-                    ).cast(
-                        "string"
                     ),
+                    "NUMBER_NORMALIZE",
                 ),
             ),
 
@@ -908,21 +910,15 @@ def transform_spark_raw(
                 ).cast(
                     "string"
                 ),
-                concat(
-                    lit(
-                        "NUMBER_NORMALIZE: "
-                    ),
+                correction_record(
+                    "payment_amount",
                     raw[
                         "payment_amount"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "payment_amount_clean"
-                    ).cast(
-                        "string"
                     ),
+                    "NUMBER_NORMALIZE",
                 ),
             ),
 
@@ -935,21 +931,15 @@ def transform_spark_raw(
                 ).cast(
                     "string"
                 ),
-                concat(
-                    lit(
-                        "NUMBER_NORMALIZE: "
-                    ),
+                correction_record(
+                    "total_amount",
                     raw[
                         "total_amount"
                     ],
-                    lit(
-                        " -> "
-                    ),
                     col(
                         "total_amount_clean"
-                    ).cast(
-                        "string"
                     ),
+                    "NUMBER_NORMALIZE",
                 ),
             ),
 
@@ -957,23 +947,15 @@ def transform_spark_raw(
                 col(
                     "total_should_recompute"
                 ),
-                concat(
-                    lit(
-                        "TOTAL_RECOMPUTE: "
-                    ),
+                correction_record(
+                    "total_amount",
                     col(
                         "total_amount_clean"
-                    ).cast(
-                        "string"
-                    ),
-                    lit(
-                        " -> "
                     ),
                     col(
                         "total_recomputed"
-                    ).cast(
-                        "string"
                     ),
+                    "TOTAL_RECOMPUTE",
                 ),
             ),
         ),

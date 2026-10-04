@@ -37,6 +37,7 @@ from config.settings import (
     MONGODB_URI,
     QUARANTINE_COLLECTION,
     RAW_COLLECTION,
+    SPARK_LOCAL_DIR,
 )
 
 from src.spark_transform import (
@@ -145,7 +146,7 @@ ORDER_SCHEMA = StructType([
 
 
 def create_spark_session():
-    spark = (
+    builder = (
         SparkSession.builder
         .appName(
             "MidtermDataPipeline"
@@ -173,10 +174,16 @@ def create_spark_session():
             "spark.sql.shuffle.partitions",
             "64",
         )
-        .config(
-        "spark.local.dir",
-        "/mnt/d/spark-temp",
     )
+
+    if SPARK_LOCAL_DIR:
+        builder = builder.config(
+            "spark.local.dir",
+            SPARK_LOCAL_DIR,
+        )
+
+    spark = (
+        builder
         .getOrCreate()
     )
 
